@@ -221,16 +221,42 @@ SELECT o."_key" k,
 		return keys.map(k => parseInt((res.rows.find(r => r.k === k) || { c: 0 }).c, 10));
 	};
 
-	module.sortedSetsCardSum = async function (keys) {
+	module.sortedSetsCardSum = async function (keys, min = '-inf', max = '+inf') {
 		if (!keys || (Array.isArray(keys) && !keys.length)) {
 			return 0;
 		}
 		if (!Array.isArray(keys)) {
 			keys = [keys];
 		}
-		const counts = await module.sortedSetsCard(keys);
-		const sum = counts.reduce((acc, val) => acc + val, 0);
-		return sum;
+		let counts = [];
+		if (min !== '-inf' || max !== '+inf') {
+			if (min === '-inf') {
+				min = null;
+			}
+			if (max === '+inf') {
+				max = null;
+			}
+
+			const res = await module.pool.query({
+				name: 'sortedSetsCardSum',
+				text: `
+	SELECT o."_key" k,
+		COUNT(*) c
+	FROM "legacy_object_live" o
+	INNER JOIN "legacy_zset" z
+			 ON o."_key" = z."_key"
+			AND o."type" = z."type"
+	WHERE o."_key" = ANY($1::TEXT[])
+		AND (z."score" >= $2::NUMERIC OR $2::NUMERIC IS NULL)
+		AND (z."score" <= $3::NUMERIC OR $3::NUMERIC IS NULL)
+	GROUP BY o."_key"`,
+				values: [keys, min, max],
+			});
+			counts = keys.map(k => parseInt((res.rows.find(r => r.k === k) || { c: 0 }).c, 10));
+		} else {
+			counts = await module.sortedSetsCard(keys);
+		}
+		return counts.reduce((acc, val) => acc + val, 0);
 	};
 
 	module.sortedSetRank = async function (key, value) {
@@ -457,6 +483,11 @@ SELECT o."_key" k
 		return data && data[0];
 	};
 
+	module.getSortedSetMembersWithScores = async function (key) {
+		const data = await module.getSortedSetsMembersWithScores([key]);
+		return data && data[0];
+	};
+
 	module.getSortedSetsMembers = async function (keys) {
 		if (!Array.isArray(keys) || !keys.length) {
 			return [];
@@ -467,6 +498,23 @@ SELECT o."_key" k
 			text: `
 SELECT "_key" k,
        "nodebb_get_sorted_set_members"("_key") m
+  FROM UNNEST($1::TEXT[]) "_key";`,
+			values: [keys],
+		});
+
+		return keys.map(k => (res.rows.find(r => r.k === k) || {}).m || []);
+	};
+
+	module.getSortedSetsMembersWithScores = async function (keys) {
+		if (!Array.isArray(keys) || !keys.length) {
+			return [];
+		}
+
+		const res = await module.pool.query({
+			name: 'getSortedSetsMembersWithScores',
+			text: `
+SELECT "_key" k,
+       "nodebb_get_sorted_set_members_withscores"("_key") m
   FROM UNNEST($1::TEXT[]) "_key";`,
 			values: [keys],
 		});
@@ -642,6 +690,9 @@ SELECT z."value",
 	module.processSortedSet = async function (setKey, process, options) {
 		const client = await module.pool.connect();
 		const batchSize = (options || {}).batch || 100;
+		const sort = options.reverse ? 'DESC' : 'ASC';
+		const min = options.min && options.min !== '-inf' ? options.min : null;
+		const max = options.max && options.max !== '+inf' ? options.max : null;
 		const cursor = client.query(new Cursor(`
 SELECT z."value", z."score"
   FROM "legacy_object_live" o
@@ -649,12 +700,14 @@ SELECT z."value", z."score"
          ON o."_key" = z."_key"
         AND o."type" = z."type"
  WHERE o."_key" = $1::TEXT
- ORDER BY z."score" ASC, z."value" ASC`, [setKey]));
+   AND (z."score" >= $2::NUMERIC OR $2::NUMERIC IS NULL)
+   AND (z."score" <= $3::NUMERIC OR $3::NUMERIC IS NULL)
+ ORDER BY z."score" ${sort}, z."value" ${sort}`, [setKey, min, max]));
 
 		if (process && process.constructor && process.constructor.name !== 'AsyncFunction') {
 			process = util.promisify(process);
 		}
-
+		let iteration = 1;
 		while (true) {
 			/* eslint-disable no-await-in-loop */
 			let rows = await cursor.readAsync(batchSize);
@@ -669,13 +722,14 @@ SELECT z."value", z."score"
 				rows = rows.map(r => r.value);
 			}
 			try {
+				if (iteration > 1 && options.interval) {
+					await sleep(options.interval);
+				}
 				await process(rows);
+				iteration += 1;
 			} catch (err) {
 				await client.release();
 				throw err;
-			}
-			if (options.interval) {
-				await sleep(options.interval);
 			}
 		}
 	};

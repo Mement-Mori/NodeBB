@@ -6,11 +6,11 @@ const utils = require('../../utils');
 const plugins = require('../../plugins');
 
 cacheController.get = async function (req, res) {
-	const postCache = require('../../posts/cache');
+	const postCache = require('../../posts/cache').getOrCreate();
 	const groupCache = require('../../groups').cache;
 	const { objectCache } = require('../../database');
 	const localCache = require('../../cache');
-
+	const uptimeInSeconds = process.uptime();
 	function getInfo(cache) {
 		return {
 			length: cache.length,
@@ -21,6 +21,7 @@ cacheController.get = async function (req, res) {
 				((cache.length / cache.maxSize) * 100).toFixed(2) :
 				((cache.itemCount / cache.max) * 100).toFixed(2),
 			hits: utils.addCommas(String(cache.hits)),
+			hitsPerSecond: (cache.hits / uptimeInSeconds).toFixed(2),
 			misses: utils.addCommas(String(cache.misses)),
 			hitRatio: ((cache.hits / (cache.hits + cache.misses) || 0)).toFixed(4),
 			enabled: cache.enabled,
@@ -45,7 +46,7 @@ cacheController.get = async function (req, res) {
 
 cacheController.dump = async function (req, res, next) {
 	let caches = {
-		post: require('../../posts/cache'),
+		post: require('../../posts/cache').getOrCreate(),
 		object: require('../../database').objectCache,
 		group: require('../../groups').cache,
 		local: require('../../cache'),

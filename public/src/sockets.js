@@ -4,6 +4,8 @@
 const io = require('socket.io-client');
 // eslint-disable-next-line no-redeclare
 const $ = require('jquery');
+// eslint-disable-next-line import/no-unresolved
+const { alert } = require('alerts');
 
 app = window.app || {};
 
@@ -14,7 +16,11 @@ app = window.app || {};
 		reconnectionAttempts: config.maxReconnectionAttempts,
 		reconnectionDelay: config.reconnectionDelay,
 		transports: config.socketioTransports,
+		autoConnect: false,
 		path: config.relative_path + '/socket.io',
+		query: {
+			_csrf: config.csrf_token,
+		},
 	};
 
 	window.socket = io(config.websocketAddress, ioParams);
@@ -43,11 +49,12 @@ app = window.app || {};
 		hooks = _hooks;
 		if (parseInt(app.user.uid, 10) >= 0) {
 			addHandlers();
+			socket.connect();
 		}
 	});
 
 	window.app.reconnect = () => {
-		if (socket.connected) {
+		if (socket.connected || parseInt(app.user.uid, 10) < 0) {
 			return;
 		}
 
@@ -106,27 +113,10 @@ app = window.app || {};
 				alerts.alert(params);
 			});
 		});
-		socket.on('event:deprecated_call', function (data) {
-			console.warn('[socket.io] ', data.eventName, 'is now deprecated in favour of', data.replacement);
+		socket.on('event:deprecated_call', (data) => {
+			console.warn('[socket.io]', data.eventName, 'is now deprecated', data.replacement ? `in favour of ${data.replacement}` : 'with no alternative planned.');
 		});
 
-		socket.removeAllListeners('event:nodebb.ready');
-		socket.on('event:nodebb.ready', function (data) {
-			if ((data.hostname === app.upstreamHost) && (!app.cacheBuster || app.cacheBuster !== data['cache-buster'])) {
-				app.cacheBuster = data['cache-buster'];
-				require(['alerts'], function (alerts) {
-					alerts.alert({
-						alert_id: 'forum_updated',
-						title: '[[global:updated.title]]',
-						message: '[[global:updated.message]]',
-						clickfn: function () {
-							window.location.reload();
-						},
-						type: 'warning',
-					});
-				});
-			}
-		});
 		socket.on('event:livereload', function () {
 			if (app.user.isAdmin && !ajaxify.currentPage.match(/admin/)) {
 				window.location.reload();
@@ -153,23 +143,34 @@ app = window.app || {};
 		});
 	}
 
-	function onConnect() {
+	async function onConnect() {
 		if (!reconnecting) {
 			hooks.fire('action:connected');
-		}
-
-		if (reconnecting) {
+		} else {
 			const reconnectEl = $('#reconnect');
 			const reconnectAlert = $('#reconnect-alert');
 
-			reconnectEl.tooltip('destroy');
+			reconnectEl.tooltip('dispose');
 			reconnectEl.html('<i class="fa fa-check text-success"></i>');
-			reconnectAlert.addClass('hide');
+			reconnectAlert.removeClass('show');
+			setTimeout(() => reconnectAlert.addClass('hide'), 100);
 			reconnecting = false;
 
 			reJoinCurrentRoom();
 
-			socket.emit('meta.reconnected');
+			const { 'cache-buster': hash, hostname } = await socket.emit('meta.reconnected');
+			if ((hostname === app.upstreamHost) && (!app.cacheBuster || app.cacheBuster !== hash)) {
+				app.cacheBuster = hash;
+				alert({
+					alert_id: 'forum_updated',
+					title: '[[global:updated.title]]',
+					message: '[[global:updated.message]]',
+					clickfn: function () {
+						window.location.reload();
+					},
+					type: 'warning',
+				});
+			}
 
 			hooks.fire('action:reconnected');
 
@@ -185,26 +186,36 @@ app = window.app || {};
 			app.currentRoom = '';
 			app.enterRoom(current);
 		}
+		if (ajaxify.data.template.chats) {
+			if (ajaxify.data.roomId) {
+				socket.emit('modules.chats.enter', ajaxify.data.roomId);
+			}
+			if (ajaxify.data.publicRooms) {
+				socket.emit('modules.chats.enterPublic', ajaxify.data.publicRooms.map(r => r.roomId));
+			}
+		}
 	}
 
 	function onReconnecting() {
-		reconnecting = true;
 		const reconnectEl = $('#reconnect');
 		const reconnectAlert = $('#reconnect-alert');
 
 		if (!reconnectEl.hasClass('active')) {
 			reconnectEl.html('<i class="fa fa-spinner fa-spin"></i>');
 			reconnectAlert.removeClass('hide');
+			setTimeout(() => reconnectAlert.addClass('show'), 100);
 		}
 
 		reconnectEl.addClass('active').removeClass('hide').tooltip({
 			placement: 'bottom',
+			animation: false,
 		});
 	}
 
 	function onDisconnect() {
+		reconnecting = true;
 		setTimeout(function () {
-			if (socket.disconnected) {
+			if (!socket.connected) {
 				onReconnecting();
 			}
 		}, 2000);

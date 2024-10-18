@@ -9,6 +9,14 @@ const plugins = require('../plugins');
 const notifications = require('../notifications');
 
 module.exports = function (Groups) {
+	Groups.getPending = async function (groupName) {
+		return await Groups.getUsersFromSet(`group:${groupName}:pending`, ['username', 'userslug', 'picture']);
+	};
+
+	Groups.getInvites = async function (groupName) {
+		return await Groups.getUsersFromSet(`group:${groupName}:invited`, ['username', 'userslug', 'picture']);
+	};
+
 	Groups.requestMembership = async function (groupName, uid) {
 		await inviteOrRequestMembership(groupName, uid, 'request');
 		const { displayname } = await user.getUserFields(uid, ['username']);
@@ -16,8 +24,8 @@ module.exports = function (Groups) {
 		const [notification, owners] = await Promise.all([
 			notifications.create({
 				type: 'group-request-membership',
-				bodyShort: `[[groups:request.notification_title, ${displayname}]]`,
-				bodyLong: `[[groups:request.notification_text, ${displayname}, ${groupName}]]`,
+				bodyShort: `[[groups:request.notification-title, ${displayname}]]`,
+				bodyLong: `[[groups:request.notification-text, ${displayname}, ${groupName}]]`,
 				nid: `group:${groupName}:uid:${uid}:request`,
 				path: `/groups/${slugify(groupName)}`,
 				from: uid,
@@ -34,9 +42,10 @@ module.exports = function (Groups) {
 
 		const notification = await notifications.create({
 			type: 'group-invite',
-			bodyShort: `[[groups:membership.accept.notification_title, ${groupName}]]`,
+			bodyShort: `[[groups:membership.accept.notification-title, ${groupName}]]`,
 			nid: `group:${groupName}:uid:${uid}:invite-accepted`,
 			path: `/groups/${slugify(groupName)}`,
+			icon: 'fa-users',
 		});
 		await notifications.push(notification, [uid]);
 	};
@@ -56,10 +65,11 @@ module.exports = function (Groups) {
 
 		const notificationData = await Promise.all(uids.map(uid => notifications.create({
 			type: 'group-invite',
-			bodyShort: `[[groups:invited.notification_title, ${groupName}]]`,
+			bodyShort: `[[groups:invited.notification-title, ${groupName}]]`,
 			bodyLong: '',
 			nid: `group:${groupName}:uid:${uid}:invite`,
 			path: `/groups/${slugify(groupName)}`,
+			icon: 'fa-users',
 		})));
 
 		await Promise.all(uids.map((uid, index) => notifications.push(notificationData[index], uid)));
@@ -107,11 +117,4 @@ module.exports = function (Groups) {
 		const map = _.zipObject(checkUids, isMembers);
 		return isArray ? uids.map(uid => !!map[uid]) : !!map[uids[0]];
 	}
-
-	Groups.getPending = async function (groupName) {
-		if (!groupName) {
-			return [];
-		}
-		return await db.getSetMembers(`group:${groupName}:pending`);
-	};
 };

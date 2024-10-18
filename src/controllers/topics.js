@@ -2,6 +2,7 @@
 
 const nconf = require('nconf');
 const qs = require('querystring');
+const validator = require('validator');
 
 const user = require('../user');
 const meta = require('../meta');
@@ -19,10 +20,10 @@ const topicsController = module.exports;
 const url = nconf.get('url');
 const relative_path = nconf.get('relative_path');
 const upload_url = nconf.get('upload_url');
+const validSorts = ['oldest_to_newest', 'newest_to_oldest', 'most_votes'];
 
 topicsController.get = async function getTopic(req, res, next) {
 	const tid = req.params.topic_id;
-
 	if (
 		(req.params.post_index && !utils.isNumber(req.params.post_index) && req.params.post_index !== 'unread') ||
 		!utils.isNumber(tid)
@@ -30,15 +31,17 @@ topicsController.get = async function getTopic(req, res, next) {
 		return next();
 	}
 	let postIndex = parseInt(req.params.post_index, 10) || 1;
+	const topicData = await topics.getTopicData(tid);
+	if (!topicData) {
+		return next();
+	}
 	const [
 		userPrivileges,
 		settings,
-		topicData,
 		rssToken,
 	] = await Promise.all([
 		privileges.topics.get(tid, req.uid),
 		user.getSettings(req.uid),
-		topics.getTopicData(tid),
 		user.auth.getFeedToken(req.uid),
 	]);
 
@@ -46,7 +49,6 @@ topicsController.get = async function getTopic(req, res, next) {
 	const pageCount = Math.max(1, Math.ceil((topicData && topicData.postcount) / settings.postsPerPage));
 	const invalidPagination = (settings.usePagination && (currentPage < 1 || currentPage > pageCount));
 	if (
-		!topicData ||
 		userPrivileges.disabled ||
 		invalidPagination ||
 		(topicData.scheduled && !userPrivileges.view_scheduled)
@@ -70,11 +72,19 @@ topicsController.get = async function getTopic(req, res, next) {
 		return helpers.redirect(res, `/topic/${tid}/${req.params.slug}${postIndex > topicData.postcount ? `/${topicData.postcount}` : ''}${generateQueryString(req.query)}`);
 	}
 	postIndex = Math.max(1, postIndex);
-	const sort = req.query.sort || settings.topicPostSort;
+	const sort = validSorts.includes(req.query.sort) ? req.query.sort : settings.topicPostSort;
 	const set = sort === 'most_votes' ? `tid:${tid}:posts:votes` : `tid:${tid}:posts`;
 	const reverse = sort === 'newest_to_oldest' || sort === 'most_votes';
-	if (settings.usePagination && !req.query.page) {
+
+	if (!req.query.page) {
 		currentPage = calculatePageFromIndex(postIndex, settings);
+	}
+	if (settings.usePagination && req.query.page) {
+		const top = ((currentPage - 1) * settings.postsPerPage) + 1;
+		const bottom = top + settings.postsPerPage;
+		if (!req.params.post_index || (postIndex < top || postIndex > bottom)) {
+			postIndex = top;
+		}
 	}
 	const { start, stop } = calculateStartStop(currentPage, postIndex, settings);
 
@@ -87,6 +97,8 @@ topicsController.get = async function getTopic(req, res, next) {
 	topicData.topicStaleDays = meta.config.topicStaleDays;
 	topicData['reputation:disabled'] = meta.config['reputation:disabled'];
 	topicData['downvote:disabled'] = meta.config['downvote:disabled'];
+	topicData.upvoteVisibility = meta.config.upvoteVisibility;
+	topicData.downvoteVisibility = meta.config.downvoteVisibility;
 	topicData['feeds:disableRSS'] = meta.config['feeds:disableRSS'] || 0;
 	topicData['signatures:hideDuplicates'] = meta.config['signatures:hideDuplicates'];
 	topicData.bookmarkThreshold = meta.config.bookmarkThreshold;
@@ -98,28 +110,32 @@ topicsController.get = async function getTopic(req, res, next) {
 	topicData.allowMultipleBadges = meta.config.allowMultipleBadges === 1;
 	topicData.privateUploads = meta.config.privateUploads === 1;
 	topicData.showPostPreviewsOnHover = meta.config.showPostPreviewsOnHover === 1;
-	topicData.rssFeedUrl = `${relative_path}/topic/${topicData.tid}.rss`;
-	if (req.loggedIn) {
-		topicData.rssFeedUrl += `?uid=${req.uid}&token=${rssToken}`;
+	topicData.sortOptionLabel = `[[topic:${validator.escape(String(sort)).replace(/_/g, '-')}]]`;
+	if (!meta.config['feeds:disableRSS']) {
+		topicData.rssFeedUrl = `${relative_path}/topic/${topicData.tid}.rss`;
+		if (req.loggedIn) {
+			topicData.rssFeedUrl += `?uid=${req.uid}&token=${rssToken}`;
+		}
 	}
 
 	topicData.postIndex = postIndex;
 
-	await Promise.all([
+	const [author] = await Promise.all([
+		user.getUserFields(topicData.uid, ['username', 'userslug']),
 		buildBreadcrumbs(topicData),
 		addOldCategory(topicData, userPrivileges),
-		addTags(topicData, req, res),
+		addTags(topicData, req, res, currentPage),
 		incrementViewCount(req, tid),
 		markAsRead(req, tid),
 		analytics.increment([`pageviews:byCid:${topicData.category.cid}`]),
 	]);
 
+	topicData.author = author;
 	topicData.pagination = pagination.create(currentPage, pageCount, req.query);
 	topicData.pagination.rel.forEach((rel) => {
 		rel.href = `${url}/topic/${topicData.slug}${rel.href}`;
 		res.locals.linkTags.push(rel);
 	});
-
 	res.render('topic', topicData);
 };
 
@@ -175,7 +191,7 @@ async function buildBreadcrumbs(topicData) {
 	const breadcrumbs = [
 		{
 			text: topicData.category.name,
-			url: `${relative_path}/category/${topicData.category.slug}`,
+			url: `${url}/category/${topicData.category.slug}`,
 			cid: topicData.category.cid,
 		},
 		{
@@ -194,18 +210,23 @@ async function addOldCategory(topicData, userPrivileges) {
 	}
 }
 
-async function addTags(topicData, req, res) {
+async function addTags(topicData, req, res, currentPage) {
 	const postIndex = parseInt(req.params.post_index, 10) || 0;
 	const postAtIndex = topicData.posts.find(p => parseInt(p.index, 10) === parseInt(Math.max(0, postIndex - 1), 10));
 	let description = '';
 	if (postAtIndex && postAtIndex.content) {
-		description = utils.stripHTMLTags(utils.decodeHTMLEntities(postAtIndex.content));
+		description = utils.stripHTMLTags(utils.decodeHTMLEntities(postAtIndex.content)).trim();
 	}
 
-	if (description.length > 255) {
-		description = `${description.slice(0, 255)}...`;
+	if (description.length > 160) {
+		description = `${description.slice(0, 157)}...`;
 	}
-	description = description.replace(/\n/g, ' ');
+	description = description.replace(/\n/g, ' ').trim();
+
+	let mainPost = topicData.posts.find(p => parseInt(p.index, 10) === 0);
+	if (!mainPost) {
+		mainPost = await posts.getPostData(topicData.mainPid);
+	}
 
 	res.locals.metaTags = [
 		{
@@ -213,16 +234,8 @@ async function addTags(topicData, req, res) {
 			content: topicData.titleRaw,
 		},
 		{
-			name: 'description',
-			content: description,
-		},
-		{
 			property: 'og:title',
 			content: topicData.titleRaw,
-		},
-		{
-			property: 'og:description',
-			content: description,
 		},
 		{
 			property: 'og:type',
@@ -234,7 +247,7 @@ async function addTags(topicData, req, res) {
 		},
 		{
 			property: 'article:modified_time',
-			content: utils.toISOString(topicData.lastposttime),
+			content: utils.toISOString(Math.max(topicData.lastposttime, mainPost && mainPost.edited)),
 		},
 		{
 			property: 'article:section',
@@ -242,12 +255,27 @@ async function addTags(topicData, req, res) {
 		},
 	];
 
+	if (description && description.length) {
+		res.locals.metaTags.push(
+			{
+				name: 'description',
+				content: description,
+			},
+			{
+				property: 'og:description',
+				content: description,
+			},
+		);
+	}
+
 	await addOGImageTags(res, topicData, postAtIndex);
 
+	const page = currentPage > 1 ? `?page=${currentPage}` : '';
 	res.locals.linkTags = [
 		{
 			rel: 'canonical',
-			href: `${url}/topic/${topicData.slug}`,
+			href: `${url}/topic/${topicData.slug}${page}`,
+			noEscape: true,
 		},
 	];
 
@@ -263,6 +291,13 @@ async function addTags(topicData, req, res) {
 		res.locals.linkTags.push({
 			rel: 'up',
 			href: `${url}/category/${topicData.category.slug}`,
+		});
+	}
+
+	if (postAtIndex) {
+		res.locals.linkTags.push({
+			rel: 'author',
+			href: `${url}/user/${postAtIndex.user.userslug}`,
 		});
 	}
 }
@@ -347,16 +382,14 @@ topicsController.pagination = async function (req, res, next) {
 	if (!utils.isNumber(tid)) {
 		return next();
 	}
-
-	const [userPrivileges, settings, topic] = await Promise.all([
-		privileges.topics.get(tid, req.uid),
-		user.getSettings(req.uid),
-		topics.getTopicData(tid),
-	]);
-
+	const topic = await topics.getTopicData(tid);
 	if (!topic) {
 		return next();
 	}
+	const [userPrivileges, settings] = await Promise.all([
+		privileges.topics.get(tid, req.uid),
+		user.getSettings(req.uid),
+	]);
 
 	if (!userPrivileges.read || !privileges.topics.canViewDeletedScheduled(topic, userPrivileges)) {
 		return helpers.notAllowed(req, res);

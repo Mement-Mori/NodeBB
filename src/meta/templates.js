@@ -1,10 +1,6 @@
 'use strict';
 
-const util = require('util');
-let mkdirp = require('mkdirp');
-
-mkdirp = mkdirp.hasOwnProperty('native') ? mkdirp : util.promisify(mkdirp);
-const rimraf = require('rimraf');
+const { mkdirp } = require('mkdirp');
 const winston = require('winston');
 const path = require('path');
 const fs = require('fs');
@@ -68,7 +64,6 @@ async function getTemplateDirs(activePlugins) {
 		theme = themeConfig.baseTheme;
 	}
 
-	themeTemplates.push(nconf.get('base_templates_path'));
 	themeTemplates = _.uniq(themeTemplates.reverse());
 
 	const coreTemplatesPath = nconf.get('core_templates_path');
@@ -113,21 +108,24 @@ async function compileTemplate(filename, source) {
 Templates.compileTemplate = compileTemplate;
 
 async function compile() {
-	const _rimraf = util.promisify(rimraf);
-
-	await _rimraf(viewsPath);
+	await fs.promises.rm(viewsPath, { recursive: true, force: true });
 	await mkdirp(viewsPath);
 
 	let files = await plugins.getActive();
 	files = await getTemplateDirs(files);
 	files = await getTemplateFiles(files);
-
+	const minify = process.env.NODE_ENV !== 'development';
 	await Promise.all(Object.keys(files).map(async (name) => {
 		const filePath = files[name];
 		let imported = await fs.promises.readFile(filePath, 'utf8');
 		imported = await processImports(files, name, imported);
 
 		await mkdirp(path.join(viewsPath, path.dirname(name)));
+
+		// remove empty lines and whitespace
+		if (minify) {
+			imported = imported.split('\n').map(line => line.trim()).filter(Boolean).join('\n');
+		}
 
 		await fs.promises.writeFile(path.join(viewsPath, name), imported);
 		const compiled = await Benchpress.precompile(imported, { filename: name });

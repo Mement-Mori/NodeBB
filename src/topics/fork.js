@@ -9,7 +9,7 @@ const plugins = require('../plugins');
 const meta = require('../meta');
 
 module.exports = function (Topics) {
-	Topics.createTopicFromPosts = async function (uid, title, pids, fromTid) {
+	Topics.createTopicFromPosts = async function (uid, title, pids, fromTid, cid) {
 		if (title) {
 			title = title.trim();
 		}
@@ -27,7 +27,9 @@ module.exports = function (Topics) {
 		pids.sort((a, b) => a - b);
 
 		const mainPid = pids[0];
-		const cid = await posts.getCidByPid(mainPid);
+		if (!cid) {
+			cid = await posts.getCidByPid(mainPid);
+		}
 
 		const [postData, isAdminOrMod] = await Promise.all([
 			posts.getPostData(mainPid),
@@ -68,9 +70,12 @@ module.exports = function (Topics) {
 			Topics.setTopicFields(tid, {
 				upvotes: postData.upvotes,
 				downvotes: postData.downvotes,
+				forkedFromTid: fromTid,
+				forkerUid: uid,
+				forkTimestamp: Date.now(),
 			}),
 			db.sortedSetsAdd(['topics:votes', `cid:${cid}:tids:votes`], postData.votes, tid),
-			Topics.events.log(fromTid, { type: 'fork', uid, href: `/topic/${tid}`, timestamp: postData.timestamp }),
+			Topics.events.log(fromTid, { type: 'fork', uid, href: `/topic/${tid}` }),
 		]);
 
 		plugins.hooks.fire('action:topic.fork', { tid: tid, fromTid: fromTid, uid: uid });

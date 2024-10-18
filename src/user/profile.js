@@ -48,7 +48,7 @@ module.exports = function (User) {
 			if (field === 'email') {
 				return await updateEmail(updateUid, data.email);
 			} else if (field === 'username') {
-				return await updateUsername(updateUid, data.username);
+				return await updateUsername(updateUid, data.username, uid);
 			} else if (field === 'fullname') {
 				return await updateFullname(updateUid, data.fullname);
 			}
@@ -232,7 +232,7 @@ module.exports = function (User) {
 	};
 
 	async function updateEmail(uid, newEmail) {
-		let oldEmail = await User.getUserField(uid, 'email');
+		let oldEmail = await db.getObjectField(`user:${uid}`, 'email');
 		oldEmail = oldEmail || '';
 		if (oldEmail === newEmail) {
 			return;
@@ -247,11 +247,11 @@ module.exports = function (User) {
 		}
 	}
 
-	async function updateUsername(uid, newUsername) {
+	async function updateUsername(uid, newUsername, callerUid) {
 		if (!newUsername) {
 			return;
 		}
-		const userData = await User.getUserFields(uid, ['username', 'userslug']);
+		const userData = await db.getObjectFields(`user:${uid}`, ['username', 'userslug']);
 		if (userData.username === newUsername) {
 			return;
 		}
@@ -260,7 +260,7 @@ module.exports = function (User) {
 		await Promise.all([
 			updateUidMapping('username', uid, newUsername, userData.username),
 			updateUidMapping('userslug', uid, newUserslug, userData.userslug),
-			db.sortedSetAdd(`user:${uid}:usernames`, now, `${newUsername}:${now}`),
+			db.sortedSetAdd(`user:${uid}:usernames`, now, `${newUsername}:${now}:${callerUid}`),
 		]);
 		await db.sortedSetRemove('username:sorted', `${userData.username.toLowerCase()}:${uid}`);
 		await db.sortedSetAdd('username:sorted', 0, `${newUsername.toLowerCase()}:${uid}`);
@@ -278,7 +278,7 @@ module.exports = function (User) {
 	}
 
 	async function updateFullname(uid, newFullname) {
-		const fullname = await User.getUserField(uid, 'fullname');
+		const fullname = await db.getObjectField(`user:${uid}`, 'fullname');
 		await updateUidMapping('fullname', uid, newFullname, fullname);
 		if (newFullname !== fullname) {
 			if (fullname) {
@@ -307,13 +307,18 @@ module.exports = function (User) {
 		const isSelf = parseInt(uid, 10) === parseInt(data.uid, 10);
 
 		if (!isAdmin && !isSelf) {
-			throw new Error('[[user:change_password_error_privileges]]');
+			throw new Error('[[user:change-password-error-privileges]]');
 		}
+
+		await plugins.hooks.fire('filter:password.check', { password: data.newPassword, uid: data.uid });
 
 		if (isSelf && hasPassword) {
 			const correct = await User.isPasswordCorrect(data.uid, data.currentPassword, data.ip);
 			if (!correct) {
-				throw new Error('[[user:change_password_error_wrong_current]]');
+				throw new Error('[[user:change-password-error-wrong-current]]');
+			}
+			if (data.currentPassword === data.newPassword) {
+				throw new Error('[[user:change-password-error-same-password]]');
 			}
 		}
 

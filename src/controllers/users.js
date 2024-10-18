@@ -25,7 +25,7 @@ usersController.index = async function (req, res, next) {
 
 	if (req.query.query) {
 		await usersController.search(req, res, next);
-	} else if (sectionToController[section]) {
+	} else if (sectionToController.hasOwnProperty(section) && sectionToController[section]) {
 		await sectionToController[section](req, res, next);
 	} else {
 		await usersController.getUsersSortedByJoinDate(req, res, next);
@@ -61,7 +61,6 @@ usersController.getOnlineUsers = async function (req, res) {
 	}
 
 	userData.anonymousUserCount = guests + hiddenCount;
-	userData.timeagoCutoff = 1000 * 60 * 60 * 24;
 
 	await render(req, res, userData);
 };
@@ -104,12 +103,12 @@ usersController.renderUsersPage = async function (set, req, res) {
 
 usersController.getUsers = async function (set, uid, query) {
 	const setToData = {
-		'users:postcount': { title: '[[pages:users/sort-posts]]', crumb: '[[users:top_posters]]' },
-		'users:reputation': { title: '[[pages:users/sort-reputation]]', crumb: '[[users:most_reputation]]' },
+		'users:postcount': { title: '[[pages:users/sort-posts]]', crumb: '[[users:top-posters]]' },
+		'users:reputation': { title: '[[pages:users/sort-reputation]]', crumb: '[[users:most-reputation]]' },
 		'users:joindate': { title: '[[pages:users/latest]]', crumb: '[[global:users]]' },
 		'users:online': { title: '[[pages:users/online]]', crumb: '[[global:online]]' },
 		'users:banned': { title: '[[pages:users/banned]]', crumb: '[[user:banned]]' },
-		'users:flags': { title: '[[pages:users/most-flags]]', crumb: '[[users:most_flags]]' },
+		'users:flags': { title: '[[pages:users/most-flags]]', crumb: '[[users:most-flags]]' },
 	};
 
 	if (!setToData[set]) {

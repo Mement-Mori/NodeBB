@@ -6,12 +6,17 @@ const nconf = require('nconf');
 const path = require('path');
 const util = require('util');
 
+const meta = require('../meta');
 const user = require('../user');
+const groups = require('../groups');
+const topics = require('../topics');
 const privileges = require('../privileges');
+const privilegeHelpers = require('../privileges/helpers');
 const plugins = require('../plugins');
 const helpers = require('./helpers');
 const auth = require('../routes/authentication');
 const writeRouter = require('../routes/write');
+const accountHelpers = require('../controllers/accounts/helpers');
 
 const controllers = {
 	helpers: require('../controllers/helpers'),
@@ -36,7 +41,7 @@ module.exports = function (middleware) {
 		async function finishLogin(req, user) {
 			const loginAsync = util.promisify(req.login).bind(req);
 			await loginAsync(user, { keepSessionInfo: true });
-			await controllers.authentication.onSuccessfulLogin(req, user.uid);
+			await controllers.authentication.onSuccessfulLogin(req, user.uid, false);
 			req.uid = parseInt(user.uid, 10);
 			req.loggedIn = req.uid > 0;
 			return true;
@@ -150,8 +155,8 @@ module.exports = function (middleware) {
 	});
 
 	middleware.canChat = helpers.try(async (req, res, next) => {
-		const canChat = await privileges.global.can('chat', req.uid);
-		if (canChat) {
+		const canChat = await privileges.global.can(['chat', 'chat:privileged'], req.uid);
+		if (canChat.includes(true)) {
 			return next();
 		}
 		controllers.helpers.notAllowed(req, res);
@@ -181,6 +186,7 @@ module.exports = function (middleware) {
 		if (allowed) {
 			return next();
 		}
+
 		controllers.helpers.notAllowed(req, res);
 	});
 
@@ -197,13 +203,17 @@ module.exports = function (middleware) {
 		if (uid <= 0) {
 			return next();
 		}
-		const userslug = await user.getUserField(uid, 'userslug');
-		if (!userslug) {
+		const [canView, userslug] = await Promise.all([
+			privileges.global.can('view:users', req.uid),
+			user.getUserField(uid, 'userslug'),
+		]);
+
+		if (!userslug || (!canView && req.uid !== uid)) {
 			return next();
 		}
 		const path = req.url.replace(/^\/api/, '')
 			.replace(`/uid/${uid}`, () => `/user/${userslug}`);
-		controllers.helpers.redirect(res, path);
+		controllers.helpers.redirect(res, path, true);
 	});
 
 	middleware.redirectMeToUserslug = helpers.try(async (req, res) => {
@@ -215,6 +225,20 @@ module.exports = function (middleware) {
 		controllers.helpers.redirect(res, path);
 	});
 
+	middleware.redirectToHomeIfBanned = helpers.try(async (req, res, next) => {
+		if (req.loggedIn) {
+			const canLoginIfBanned = await user.bans.canLoginIfBanned(req.uid);
+			if (!canLoginIfBanned) {
+				req.logout(() => {
+					res.redirect('/');
+				});
+				return;
+			}
+		}
+
+		next();
+	});
+
 	middleware.requireUser = function (req, res, next) {
 		if (req.loggedIn) {
 			return next();
@@ -223,23 +247,96 @@ module.exports = function (middleware) {
 		res.status(403).render('403', { title: '[[global:403.title]]' });
 	};
 
+	middleware.buildAccountData = async (req, res, next) => {
+		// use lowercase slug on api routes, or direct to the user/<lowercaseslug>
+		const lowercaseSlug = req.params.userslug.toLowerCase();
+		if (req.params.userslug !== lowercaseSlug) {
+			if (res.locals.isAPI) {
+				req.params.userslug = lowercaseSlug;
+			} else {
+				const newPath = req.path.replace(new RegExp(`/${req.params.userslug}`), () => `/${lowercaseSlug}`);
+				return res.redirect(`${nconf.get('relative_path')}${newPath}`);
+			}
+		}
+
+		res.locals.userData = await accountHelpers.getUserDataByUserSlug(req.params.userslug, req.uid, req.query);
+		if (!res.locals.userData) {
+			return next('route');
+		}
+		next();
+	};
+
 	middleware.registrationComplete = async function registrationComplete(req, res, next) {
-		// If the user's session contains registration data, redirect the user to complete registration
+		/**
+		 * Redirect the user to complete registration if:
+		 *   * user's session contains registration data
+		 *   * email is required and they have no confirmed email (pending doesn't count, but admins are OK)
+		 */
+		const path = req.path.startsWith('/api/') ? req.path.replace('/api', '') : req.path;
+
+		if (meta.config.requireEmailAddress && await requiresEmailConfirmation(req)) {
+			req.session.registration = {
+				...req.session.registration,
+				uid: req.uid,
+				updateEmail: true,
+			};
+		}
+
 		if (!req.session.hasOwnProperty('registration')) {
 			return setImmediate(next);
 		}
 
-		const path = req.path.startsWith('/api/') ? req.path.replace('/api', '') : req.path;
 		const { allowed } = await plugins.hooks.fire('filter:middleware.registrationComplete', {
-			allowed: ['/register/complete'],
+			allowed: ['/register/complete', '/confirm/'],
 		});
-		if (!allowed.includes(path)) {
-			// Append user data if present
-			req.session.registration.uid = req.session.registration.uid || req.uid;
-
-			controllers.helpers.redirect(res, '/register/complete');
-		} else {
-			setImmediate(next);
+		if (allowed.includes(path) || allowed.some(p => path.startsWith(p))) {
+			return setImmediate(next);
 		}
+
+		// Append user data if present
+		req.session.registration.uid = req.session.registration.uid || req.uid;
+
+		controllers.helpers.redirect(res, '/register/complete');
 	};
+
+	async function requiresEmailConfirmation(req) {
+		/**
+		 * N.B. THIS IS NOT AN AUTHENTICATION MECHANISM
+		 *
+		 * It merely decides whether or not the accessed category is restricted to
+		 * verified users only, and renders a decision (Boolean) based on whether
+		 * the calling user is verified or not.
+		 */
+		if (req.uid <= 0) {
+			return false;
+		}
+
+		// Extract tid or cid
+		const [confirmed, isAdmin] = await Promise.all([
+			groups.isMember(req.uid, 'verified-users'),
+			user.isAdministrator(req.uid),
+		]);
+		if (confirmed || isAdmin) {
+			return false;
+		}
+
+		let cid;
+		let privilege;
+		if (req.params.hasOwnProperty('category_id')) {
+			cid = req.params.category_id;
+			privilege = 'read';
+		} else if (req.params.hasOwnProperty('topic_id')) {
+			cid = await topics.getTopicField(req.params.topic_id, 'cid');
+			privilege = 'topics:read';
+		} else {
+			return false; // not a category or topic url, no check required
+		}
+
+		const [registeredAllowed, verifiedAllowed] = await Promise.all([
+			privilegeHelpers.isAllowedTo([privilege], 'registered-users', cid),
+			privilegeHelpers.isAllowedTo([privilege], 'verified-users', cid),
+		]);
+
+		return !registeredAllowed.pop() && verifiedAllowed.pop();
+	}
 };

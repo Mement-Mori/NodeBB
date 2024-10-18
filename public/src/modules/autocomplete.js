@@ -1,36 +1,38 @@
 'use strict';
 
-define('autocomplete', ['api', 'alerts'], function (api, alerts) {
-	const module = {};
+define('autocomplete', [
+	'api', 'alerts', '@textcomplete/core', '@textcomplete/textarea', '@textcomplete/contenteditable',
+], function (api, alerts, { Textcomplete }, { TextareaEditor }, { ContenteditableEditor }) {
+	const autocomplete = {};
 	const _default = {
 		delay: 200,
+		appendTo: null,
 	};
 
-	module.init = (params) => {
-		const { input, source, onSelect, delay } = { ..._default, ...params };
-
+	autocomplete.init = (params) => {
+		const acParams = { ..._default, ...params };
+		const { input, onSelect } = acParams;
 		app.loadJQueryUI(function () {
 			input.autocomplete({
-				delay,
+				...acParams,
 				open: function () {
 					$(this).autocomplete('widget').css('z-index', 100005);
 				},
 				select: function (event, ui) {
 					handleOnSelect(input, onSelect, event, ui);
 				},
-				source,
 			});
 		});
 	};
 
-	module.user = function (input, params, onSelect) {
+	autocomplete.user = function (input, params, onSelect) {
 		if (typeof params === 'function') {
 			onSelect = params;
 			params = {};
 		}
 		params = params || {};
 
-		module.init({
+		autocomplete.init({
 			input,
 			onSelect,
 			source: (request, response) => {
@@ -69,8 +71,8 @@ define('autocomplete', ['api', 'alerts'], function (api, alerts) {
 		});
 	};
 
-	module.group = function (input, onSelect) {
-		module.init({
+	autocomplete.group = function (input, onSelect) {
+		autocomplete.init({
 			input,
 			onSelect,
 			source: (request, response) => {
@@ -96,8 +98,8 @@ define('autocomplete', ['api', 'alerts'], function (api, alerts) {
 		});
 	};
 
-	module.tag = function (input, onSelect) {
-		module.init({
+	autocomplete.tag = function (input, onSelect) {
+		autocomplete.init({
 			input,
 			onSelect,
 			delay: 100,
@@ -129,5 +131,37 @@ define('autocomplete', ['api', 'alerts'], function (api, alerts) {
 		onselect(event, ui);
 	}
 
-	return module;
+	// This is a generic method that is also used by the chat
+	autocomplete.setup = function ({ element, strategies, options }) {
+		const targetEl = element.get(0);
+		if (!targetEl) {
+			return;
+		}
+		var editor;
+		if (targetEl.nodeName === 'TEXTAREA' || targetEl.nodeName === 'INPUT') {
+			editor = new TextareaEditor(targetEl);
+		} else if (targetEl.nodeName === 'DIV' && targetEl.getAttribute('contenteditable') === 'true') {
+			editor = new ContenteditableEditor(targetEl);
+		}
+		if (!editor) {
+			throw new Error('unknown target element type');
+		}
+		// yuku-t/textcomplete inherits directionality from target element itself
+		targetEl.setAttribute('dir', document.querySelector('html').getAttribute('data-dir'));
+
+		var textcomplete = new Textcomplete(editor, strategies, {
+			dropdown: options,
+		});
+		textcomplete.on('rendered', function () {
+			if (textcomplete.dropdown.items.length) {
+				// Activate the first item by default.
+				textcomplete.dropdown.items[0].activate();
+			}
+		});
+
+		return textcomplete;
+	};
+
+
+	return autocomplete;
 });

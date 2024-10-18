@@ -1,7 +1,11 @@
 {
+	"manage-categories": "Manage Categories",
+	"add-category": "Add category",
+	"jump-to": "Jump to...",
 	"settings": "Category Settings",
+	"edit-category": "Edit Category",
 	"privileges": "Privileges",
-
+	"back-to-categories": "Back to categories",
 	"name": "Category Name",
 	"description": "Category Description",
 	"bg-color": "Background Colour",
@@ -14,9 +18,11 @@
 	"is-section": "Treat this category as a section",
 	"post-queue": "Post queue",
 	"tag-whitelist": "Tag Whitelist",
-	"upload-image": "Upload Image",
+	"upload-image": "Ladda upp bild",
+	"upload": "Upload",
 	"delete-image": "Remove",
 	"category-image": "Category Image",
+	"image-and-icon": "Image & Icon",
 	"parent-category": "Parent Category",
 	"optional-parent-category": "(Optional) Parent Category",
 	"top-level": "Top Level",
@@ -31,6 +37,7 @@
 	"disable": "Disable",
 	"edit": "Edit",
 	"analytics": "Analytics",
+
 	"view-category": "View category",
 	"set-order": "Set order",
 	"set-order-help": "Setting the order of the category will move this category to that order and update the order of other categories as necessary. Minimum order is 1 which puts the category at the top.",
@@ -85,7 +92,7 @@
 	"alert.find-group": "Find a Group",
 	"alert.group-search": "Search for a group here...",
 	"alert.not-enough-whitelisted-tags": "Whitelisted tags are less than minimum tags, you need to create more whitelisted tags!",
-	"collapse-all": "Collapse All",
+	"collapse-all": "Dölj alla",
 	"expand-all": "Expand All",
 	"disable-on-create": "Disable on create",
 	"no-matches": "No matches"

@@ -1,7 +1,7 @@
 'use strict';
 
 
-define('forum/infinitescroll', ['hooks', 'alerts'], function (hooks, alerts) {
+define('forum/infinitescroll', ['hooks', 'alerts', 'api'], function (hooks, alerts, api) {
 	const scroll = {};
 	let callback;
 	let previousScrollTop = 0;
@@ -20,8 +20,9 @@ define('forum/infinitescroll', ['hooks', 'alerts'], function (hooks, alerts) {
 		}
 		previousScrollTop = $(window).scrollTop();
 		$(window).off('scroll', startScrollTimeout).on('scroll', startScrollTimeout);
-
-		if ($body.height() <= $(window).height()) {
+		if ($body.height() <= $(window).height() && (
+			!ajaxify.data.hasOwnProperty('pageCount') || ajaxify.data.pageCount > 1
+		)) {
 			callback(1);
 		}
 	};
@@ -39,7 +40,7 @@ define('forum/infinitescroll', ['hooks', 'alerts'], function (hooks, alerts) {
 	function onScroll() {
 		const bsEnv = utils.findBootstrapEnvironment();
 		const mobileComposerOpen = (bsEnv === 'xs' || bsEnv === 'sm') && $('html').hasClass('composing');
-		if (loadingMore || mobileComposerOpen) {
+		if (loadingMore || mobileComposerOpen || app.flags._glance) {
 			return;
 		}
 		const currentScrollTop = $(window).scrollTop();
@@ -72,7 +73,9 @@ define('forum/infinitescroll', ['hooks', 'alerts'], function (hooks, alerts) {
 		const hookData = { method: method, data: data };
 		hooks.fire('action:infinitescroll.loadmore', hookData);
 
-		socket.emit(hookData.method, hookData.data, function (err, data) {
+		const call = hookData.method.startsWith('/') ? api.get : socket.emit;
+
+		call(hookData.method, hookData.data, function (err, data) {
 			if (err) {
 				loadingMore = false;
 				return alerts.error(err);
@@ -98,7 +101,7 @@ define('forum/infinitescroll', ['hooks', 'alerts'], function (hooks, alerts) {
 			});
 		}).fail(function (jqXHR) {
 			loadingMore = false;
-			alerts.error(String(jqXHR.responseJSON || jqXHR.statusText));
+			alerts.error(String(jqXHR.responseJSON || '[[error:no-connection]]'));
 		});
 	};
 

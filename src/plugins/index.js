@@ -6,11 +6,10 @@ const winston = require('winston');
 const semver = require('semver');
 const nconf = require('nconf');
 const chalk = require('chalk');
-const request = require('request-promise-native');
 
+const request = require('../request');
 const user = require('../user');
 const posts = require('../posts');
-const meta = require('../meta');
 
 const { pluginNamePattern, themeNamePattern, paths } = require('../constants');
 
@@ -33,8 +32,8 @@ Plugins.libraries = {};
 Plugins.loadedHooks = {};
 Plugins.staticDirs = {};
 Plugins.cssFiles = [];
-Plugins.lessFiles = [];
-Plugins.acpLessFiles = [];
+Plugins.scssFiles = [];
+Plugins.acpScssFiles = [];
 Plugins.clientScripts = [];
 Plugins.acpScripts = [];
 Plugins.libraryPaths = [];
@@ -98,8 +97,8 @@ Plugins.reload = async function () {
 	Plugins.staticDirs = {};
 	Plugins.versionWarning = [];
 	Plugins.cssFiles.length = 0;
-	Plugins.lessFiles.length = 0;
-	Plugins.acpLessFiles.length = 0;
+	Plugins.scssFiles.length = 0;
+	Plugins.acpScssFiles.length = 0;
 	Plugins.clientScripts.length = 0;
 	Plugins.acpScripts.length = 0;
 	Plugins.libraryPaths.length = 0;
@@ -125,7 +124,6 @@ Plugins.reload = async function () {
 
 	// Core hooks
 	posts.registerHooks();
-	meta.configs.registerHooks();
 
 	// Deprecation notices
 	Plugins.hooks._deprecated.forEach((deprecation, hook) => {
@@ -155,10 +153,11 @@ Plugins.reloadRoutes = async function (params) {
 
 Plugins.get = async function (id) {
 	const url = `${nconf.get('registry') || 'https://packages.nodebb.org'}/api/v1/plugins/${id}`;
-	const body = await request(url, {
-		json: true,
-	});
-
+	const { response, body } = await request.get(url);
+	if (!response.ok) {
+		console.log(response);
+		throw new Error(`[[error:unable-to-load-plugin, ${id}]]`);
+	}
 	let normalised = await Plugins.normalise([body ? body.payload : {}]);
 	normalised = normalised.filter(plugin => plugin.id === id);
 	return normalised.length ? normalised[0] : undefined;
@@ -171,9 +170,11 @@ Plugins.list = async function (matching) {
 	const { version } = require(paths.currentPackage);
 	const url = `${nconf.get('registry') || 'https://packages.nodebb.org'}/api/v1/plugins${matching !== false ? `?version=${version}` : ''}`;
 	try {
-		const body = await request(url, {
-			json: true,
-		});
+		const { response, body } = await request.get(url);
+		if (!response.ok) {
+			console.log(response);
+			throw new Error(`[[error:unable-to-load-plugins-from-nbbpm]]`);
+		}
 		return await Plugins.normalise(body);
 	} catch (err) {
 		winston.error(`Error loading ${url}`, err);
@@ -183,9 +184,12 @@ Plugins.list = async function (matching) {
 
 Plugins.listTrending = async () => {
 	const url = `${nconf.get('registry') || 'https://packages.nodebb.org'}/api/v1/analytics/top/week`;
-	return await request(url, {
-		json: true,
-	});
+	const { response, body } = await request.get(url);
+	if (!response.ok) {
+		console.log(response);
+		throw new Error(`[[error:unable-to-load-trending-plugins]]`);
+	}
+	return body;
 };
 
 Plugins.normalise = async function (apiReturn) {
@@ -233,6 +237,13 @@ Plugins.normalise = async function (apiReturn) {
 		}
 		pluginMap[plugin.id].outdated = semver.gt(pluginMap[plugin.id].latest, pluginMap[plugin.id].version);
 	});
+
+	if (nconf.get('plugins:active')) {
+		nconf.get('plugins:active').forEach((id) => {
+			pluginMap[id] = pluginMap[id] || {};
+			pluginMap[id].active = true;
+		});
+	}
 
 	const pluginArray = Object.values(pluginMap);
 

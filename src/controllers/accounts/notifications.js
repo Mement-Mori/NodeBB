@@ -12,10 +12,14 @@ notificationsController.get = async function (req, res, next) {
 		{ name: '[[notifications:all]]', filter: '' },
 		{ name: '[[global:topics]]', filter: 'new-topic' },
 		{ name: '[[notifications:replies]]', filter: 'new-reply' },
+		{ name: '[[notifications:tags]]', filter: 'new-topic-with-tag' },
+		{ name: '[[notifications:categories]]', filter: 'new-topic-in-category' },
 		{ name: '[[notifications:chat]]', filter: 'new-chat' },
 		{ name: '[[notifications:group-chat]]', filter: 'new-group-chat' },
+		{ name: '[[notifications:public-chat]]', filter: 'new-public-chat' },
 		{ name: '[[notifications:follows]]', filter: 'follow' },
 		{ name: '[[notifications:upvote]]', filter: 'upvote' },
+		{ name: '[[notifications:awards]]', filter: 'new-reward' },
 	];
 
 	const moderatorFilters = [
@@ -54,8 +58,14 @@ notificationsController.get = async function (req, res, next) {
 		return next();
 	}
 
-	const nids = await user.notifications.getAll(req.uid, selectedFilter.filter);
-	let notifications = await user.notifications.getNotifications(nids, req.uid);
+	const data = await user.notifications.getAllWithCounts(req.uid, selectedFilter.filter);
+	let notifications = await user.notifications.getNotifications(data.nids, req.uid);
+
+	allFilters.forEach((filterData) => {
+		if (filterData && filterData.filter) {
+			filterData.count = data.counts[filterData.filter] || 0;
+		}
+	});
 
 	const pageCount = Math.max(1, Math.ceil(notifications.length / itemsPerPage));
 	notifications = notifications.slice(start, stop + 1);

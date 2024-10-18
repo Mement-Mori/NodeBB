@@ -4,9 +4,6 @@ const user = require('../../user');
 const privileges = require('../../privileges');
 const plugins = require('../../plugins');
 
-const sockets = require('..');
-const api = require('../../api');
-
 module.exports = function (SocketUser) {
 	SocketUser.updateCover = async function (socket, data) {
 		if (!socket.uid) {
@@ -44,36 +41,16 @@ module.exports = function (SocketUser) {
 
 	SocketUser.toggleBlock = async function (socket, data) {
 		const isBlocked = await user.blocks.is(data.blockeeUid, data.blockerUid);
-		await user.blocks.can(socket.uid, data.blockerUid, data.blockeeUid, isBlocked ? 'unblock' : 'block');
-		await user.blocks[isBlocked ? 'remove' : 'add'](data.blockeeUid, data.blockerUid);
+		const { action, blockerUid, blockeeUid } = data;
+		if (action !== 'block' && action !== 'unblock') {
+			throw new Error('[[error:unknow-block-action]]');
+		}
+		await user.blocks.can(socket.uid, blockerUid, blockeeUid, action);
+		if (data.action === 'block') {
+			await user.blocks.add(blockeeUid, blockerUid);
+		} else if (data.action === 'unblock') {
+			await user.blocks.remove(blockeeUid, blockerUid);
+		}
 		return !isBlocked;
 	};
-
-	SocketUser.exportProfile = async function (socket, data) {
-		await doExport(socket, data, 'profile');
-	};
-
-	SocketUser.exportPosts = async function (socket, data) {
-		await doExport(socket, data, 'posts');
-	};
-
-	SocketUser.exportUploads = async function (socket, data) {
-		await doExport(socket, data, 'uploads');
-	};
-
-	async function doExport(socket, data, type) {
-		sockets.warnDeprecated(socket, 'POST /api/v3/users/:uid/exports/:type');
-
-		if (!socket.uid) {
-			throw new Error('[[error:invalid-uid]]');
-		}
-
-		if (!data || parseInt(data.uid, 10) <= 0) {
-			throw new Error('[[error:invalid-data]]');
-		}
-
-		await user.isAdminOrSelf(socket.uid, data.uid);
-
-		api.users.generateExport(socket, { type, ...data });
-	}
 };

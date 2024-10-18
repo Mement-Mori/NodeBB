@@ -1,4 +1,5 @@
 {
+	"navigation": "Նավիգացիա",
 	"icon": "Պատկեր",
 	"change-icon": "փոփոխություն ",
 	"route": "Ուղեգիծ",
@@ -9,10 +10,10 @@
 	"id": "ID: ընտրովի ",
 
 	"properties": "Հատկություններ",
-	"groups": "Խմբեր",
+	"show-to-groups": "Show to Groups:",
 	"open-new-window": "Բացել նոր պատուհանում",
 	"dropdown": "Բացվող",
-	"dropdown-placeholder": "Տեղադրեք ձեր բացվող ընտրացանկի տարրերը ստորև, այսինքն՝ &lt;li&gt;&lt;a href&#x3D;&quot;https://myforum.com&quot;&gt;Հղում 1&lt;/a&gt;&lt;/li&gt;",
+	"dropdown-placeholder": "Տեղադրեք ձեր բացվող ընտրացանկի տարրերը ստորև, այսինքն՝ <br/>&lt;li&gt;&lt;a class=&quot;dropdown-item&quot; href&#x3D;&quot;https://myforum.com&quot;&gt;Link 1&lt;/a&gt;&lt;/li&gt;",
 
 	"btn.delete": "Ջնջել",
 	"btn.disable": "Անջատել",

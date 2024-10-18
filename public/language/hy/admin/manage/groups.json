@@ -1,4 +1,10 @@
 {
+	"manage-groups": "Կառավարել Խմբերը",
+	"add-group": "Ավելացնել խումբ",
+	"edit-group": "Խմբագրել խումբ",
+	"back-to-groups": "Վերադառնալ խմբերին",
+	"view-group": "Դիտել խումբը",
+	"icon-and-title": "Նշան և Վերնագիր",
 	"name": "Խմբի անուն",
 	"badge": "Նշան",
 	"properties": "Հատկություններ",
@@ -10,7 +16,7 @@
 	"edit": "Խմբագրել ",
 	"delete": "Ջնջել",
 	"privileges": "Արտոնություններ ",
-	"download-csv": "CSV",
+	"members-csv": "Անդամներ (CSV)",
 	"search-placeholder": "Որոնում ",
 	"create": "Ստեղծել խումբ",
 	"description-placeholder": "Ձեր խմբի մասին կարճ նկարագրություն",
@@ -39,6 +45,5 @@
 	"revert": "Վերադարձ",
 
 	"edit.no-users-found": "Օգտատերեր չեն գտնվել",
-	"edit.confirm-remove-user": "Վստա՞հ եք, որ ուզում եք հեռացնել այս օգտվողին:",
-	"edit.save-success": "Փոփոխությունները պահված են:"
+	"edit.confirm-remove-user": "Վստա՞հ եք, որ ուզում եք հեռացնել այս օգտվողին:"
 }

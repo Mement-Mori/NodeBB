@@ -27,7 +27,7 @@ widgets.render = async function (uid, options) {
 	const returnData = {};
 	locations.forEach((location, i) => {
 		if (Array.isArray(widgetData[i]) && widgetData[i].length) {
-			returnData[location] = widgetData[i].filter(Boolean);
+			returnData[location] = widgetData[i].filter(widget => widget && widget.html);
 		}
 	});
 
@@ -41,11 +41,13 @@ async function renderLocation(location, data, uid, options) {
 		return [];
 	}
 
-	const renderedWidgets = await Promise.all(widgetsAtLocation.map(widget => renderWidget(widget, uid, options)));
+	const renderedWidgets = await Promise.all(
+		widgetsAtLocation.map(widget => renderWidget(widget, uid, options, location))
+	);
 	return renderedWidgets;
 }
 
-async function renderWidget(widget, uid, options) {
+async function renderWidget(widget, uid, options, location) {
 	if (!widget || !widget.data || (!!widget.data['hide-mobile'] && options.req.useragent.isMobile)) {
 		return;
 	}
@@ -69,6 +71,7 @@ async function renderWidget(widget, uid, options) {
 		data: widget.data,
 		req: options.req,
 		res: options.res,
+		location,
 	});
 
 	if (!data) {
@@ -101,7 +104,13 @@ widgets.checkVisibility = async function (data, uid) {
 	if (data.groupsHideFrom.length) {
 		isHidden = await groups.isMemberOfAny(uid, data.groupsHideFrom);
 	}
-	return isVisible && !isHidden;
+
+	const isExpired = (
+		(data.startDate && Date.now() < new Date(data.startDate).getTime()) ||
+		(data.endDate && Date.now() > new Date(data.endDate).getTime())
+	);
+
+	return isVisible && !isHidden && !isExpired;
 };
 
 widgets.getWidgetDataForTemplates = async function (templates) {
@@ -182,15 +191,84 @@ widgets.setAreas = async function (areas) {
 	);
 };
 
-widgets.reset = async function () {
+widgets.getAvailableAreas = async function () {
 	const defaultAreas = [
-		{ name: 'Draft Zone', template: 'global', location: 'header' },
-		{ name: 'Draft Zone', template: 'global', location: 'footer' },
-		{ name: 'Draft Zone', template: 'global', location: 'sidebar' },
+		{ name: 'Global Header', template: 'global', location: 'header' },
+		{ name: 'Global Footer', template: 'global', location: 'footer' },
+		{ name: 'Global Sidebar', template: 'global', location: 'sidebar' },
+
+		{ name: 'Group Page (Left)', template: 'groups/details.tpl', location: 'left' },
+		{ name: 'Group Page (Right)', template: 'groups/details.tpl', location: 'right' },
+
+		{ name: 'Chat Header', template: 'chats.tpl', location: 'header' },
+		{ name: 'Chat Sidebar', template: 'chats.tpl', location: 'sidebar' },
 	];
 
+	return await plugins.hooks.fire('filter:widgets.getAreas', defaultAreas);
+};
+
+widgets.saveLocationsOnThemeReset = async function () {
+	const locations = {};
+	const available = await widgets.getAvailableAreas();
+	for (const area of available) {
+		/* eslint-disable no-await-in-loop */
+		const widgetsAtLocation = await widgets.getArea(area.template, area.location);
+		if (widgetsAtLocation.length) {
+			locations[area.template] = locations[area.template] || [];
+			if (!locations[area.template].includes(area.location)) {
+				locations[area.template].push(area.location);
+			}
+		}
+	}
+
+	if (Object.keys(locations).length) {
+		await db.set('widgets:draft:locations', JSON.stringify(locations));
+	}
+};
+
+widgets.moveMissingAreasToDrafts = async function () {
+	const locationsObj = await db.get('widgets:draft:locations');
+	if (!locationsObj) {
+		return;
+	}
+	try {
+		const locations = JSON.parse(locationsObj);
+		const [available, draftWidgets] = await Promise.all([
+			widgets.getAvailableAreas(),
+			widgets.getArea('global', 'drafts'),
+		]);
+		let saveDraftWidgets = draftWidgets || [];
+		for (const [template, tplLocations] of Object.entries(locations)) {
+			for (const location of tplLocations) {
+				const locationExists = available.find(
+					area => area.template === template && area.location === location
+				);
+				if (!locationExists) {
+					const widgetsAtLocation = await widgets.getArea(template, location);
+					saveDraftWidgets = saveDraftWidgets.concat(widgetsAtLocation);
+					await widgets.setArea({
+						template,
+						location,
+						widgets: [],
+					});
+				}
+			}
+		}
+		await widgets.setArea({
+			template: 'global',
+			location: 'drafts',
+			widgets: saveDraftWidgets,
+		});
+	} catch (err) {
+		winston.error(err.stack);
+	} finally {
+		await db.delete('widgets:draft:locations');
+	}
+};
+
+widgets.reset = async function () {
 	const [areas, drafts] = await Promise.all([
-		plugins.hooks.fire('filter:widgets.getAreas', defaultAreas),
+		widgets.getAvailableAreas(),
 		widgets.getArea('global', 'drafts'),
 	]);
 

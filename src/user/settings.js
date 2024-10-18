@@ -10,9 +10,16 @@ const notifications = require('../notifications');
 const languages = require('../languages');
 
 module.exports = function (User) {
+	const spiderDefaultSettings = {
+		usePagination: 1,
+		topicPostSort: 'oldest_to_newest',
+		postsPerPage: 20,
+		topicsPerPage: 20,
+	};
 	User.getSettings = async function (uid) {
 		if (parseInt(uid, 10) <= 0) {
-			return await onSettingsLoaded(0, {});
+			const isSpider = parseInt(uid, 10) === -1;
+			return await onSettingsLoaded(uid, isSpider ? spiderDefaultSettings : {});
 		}
 		let settings = await db.getObject(`user:${uid}:settings`);
 		settings = settings || {};
@@ -60,7 +67,7 @@ module.exports = function (User) {
 		settings.userLang = settings.userLang || meta.config.defaultLang || 'en-GB';
 		settings.acpLang = settings.acpLang || settings.userLang;
 		settings.topicPostSort = getSetting(settings, 'topicPostSort', 'oldest_to_newest');
-		settings.categoryTopicSort = getSetting(settings, 'categoryTopicSort', 'newest_to_oldest');
+		settings.categoryTopicSort = getSetting(settings, 'categoryTopicSort', 'recently_replied');
 		settings.followTopicsOnCreate = parseInt(getSetting(settings, 'followTopicsOnCreate', 1), 10) === 1;
 		settings.followTopicsOnReply = parseInt(getSetting(settings, 'followTopicsOnReply', 0), 10) === 1;
 		settings.upvoteNotifFreq = getSetting(settings, 'upvoteNotifFreq', 'all');

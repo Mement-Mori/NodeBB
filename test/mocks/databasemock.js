@@ -194,7 +194,7 @@ async function setupMockDefaults() {
 	meta.config.autoDetectLang = 0;
 
 	require('../../src/groups').cache.reset();
-	require('../../src/posts/cache').reset();
+	require('../../src/posts/cache').getOrCreate().reset();
 	require('../../src/cache').reset();
 	require('../../src/middleware/uploads').clearCache();
 	// privileges must be given after cache reset
@@ -206,10 +206,11 @@ async function setupMockDefaults() {
 		id: 'nodebb-theme-persona',
 	});
 
-	const rimraf = util.promisify(require('rimraf'));
-	await rimraf('test/uploads');
+	const fs = require('fs');
+	await fs.promises.rm('test/uploads', { recursive: true, force: true });
 
-	const mkdirp = require('mkdirp');
+
+	const { mkdirp } = require('mkdirp');
 
 	const folders = [
 		'test/uploads',

@@ -14,6 +14,12 @@ const sleep = util.promisify(setTimeout);
 
 const Interstitials = module.exports;
 
+Interstitials.get = async (req, userData) => plugins.hooks.fire('filter:register.interstitial', {
+	req,
+	userData,
+	interstitials: [],
+});
+
 Interstitials.email = async (data) => {
 	if (!data.userData) {
 		throw new Error('[[error:invalid-data]]');
@@ -22,9 +28,9 @@ Interstitials.email = async (data) => {
 		return data;
 	}
 
-	const [isAdminOrGlobalMod, hasPassword] = await Promise.all([
-		user.isAdminOrGlobalMod(data.req.uid),
+	const [hasPassword, hasPending] = await Promise.all([
 		user.hasPassword(data.userData.uid),
+		user.email.isValidationPending(data.userData.uid),
 	]);
 
 	let email;
@@ -37,9 +43,14 @@ Interstitials.email = async (data) => {
 		data: {
 			email,
 			requireEmailAddress: meta.config.requireEmailAddress,
-			issuePasswordChallenge: !!data.userData.uid && hasPassword,
+			issuePasswordChallenge: hasPassword,
+			hasPending,
 		},
 		callback: async (userData, formData) => {
+			if (formData.email) {
+				formData.email = String(formData.email).trim();
+			}
+
 			// Validate and send email confirmation
 			if (userData.uid) {
 				const isSelf = parseInt(userData.uid, 10) === parseInt(data.req.uid, 10);
@@ -56,7 +67,7 @@ Interstitials.email = async (data) => {
 					}),
 				]);
 
-				if (!isAdminOrGlobalMod && !isPasswordCorrect) {
+				if (!isPasswordCorrect) {
 					await sleep(2000);
 				}
 
@@ -75,14 +86,7 @@ Interstitials.email = async (data) => {
 					}
 
 					// Admins editing will auto-confirm, unless editing their own email
-					if (isAdminOrGlobalMod && userData.uid !== data.req.uid) {
-						if (!await user.email.available(formData.email)) {
-							throw new Error('[[error:email-taken]]');
-						}
-						await user.email.remove(userData.uid);
-						await user.setUserField(userData.uid, 'email', formData.email);
-						await user.email.confirmByUid(userData.uid);
-					} else if (canEdit) {
+					if (canEdit) {
 						if (hasPassword && !isPasswordCorrect) {
 							throw new Error('[[error:invalid-password]]');
 						}
@@ -93,7 +97,9 @@ Interstitials.email = async (data) => {
 						}).catch((err) => {
 							winston.error(`[user.interstitials.email] Validation email failed to send\n[emailer.send] ${err.stack}`);
 						});
-						data.req.session.emailChanged = 1;
+						if (isSelf) {
+							data.req.session.emailChanged = 1;
+						}
 					} else {
 						// User attempting to edit another user's email -- not allowed
 						throw new Error('[[error:no-privileges]]');
@@ -103,8 +109,8 @@ Interstitials.email = async (data) => {
 						throw new Error('[[error:invalid-email]]');
 					}
 
-					if (current.length && (!hasPassword || (hasPassword && isPasswordCorrect) || isAdminOrGlobalMod)) {
-						// User or admin explicitly clearing their email
+					if (current.length && (!hasPassword || (hasPassword && isPasswordCorrect))) {
+						// User explicitly clearing their email
 						await user.email.remove(userData.uid, isSelf ? data.req.session.id : null);
 					}
 				}
@@ -158,7 +164,7 @@ Interstitials.gdpr = async function (data) {
 				userData.gdpr_consent = true;
 			}
 
-			next(userData.gdpr_consent ? null : new Error('[[register:gdpr_consent_denied]]'));
+			next(userData.gdpr_consent ? null : new Error('[[register:gdpr-consent-denied]]'));
 		},
 	});
 	return data;
@@ -196,7 +202,7 @@ Interstitials.tou = async function (data) {
 				userData.acceptTos = true;
 			}
 
-			next(userData.acceptTos ? null : new Error('[[register:terms_of_use_error]]'));
+			next(userData.acceptTos ? null : new Error('[[register:terms-of-use-error]]'));
 		},
 	});
 	return data;

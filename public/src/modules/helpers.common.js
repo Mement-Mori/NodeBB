@@ -3,6 +3,7 @@
 module.exports = function (utils, Benchpress, relative_path) {
 	Benchpress.setGlobal('true', true);
 	Benchpress.setGlobal('false', false);
+	const oneDayInMs = 24 * 60 * 60 * 1000;
 
 	const helpers = {
 		displayMenuItem,
@@ -11,6 +12,8 @@ module.exports = function (utils, Benchpress, relative_path) {
 		stringify,
 		escape,
 		stripTags,
+		buildCategoryIcon,
+		buildCategoryLabel,
 		generateCategoryBackground,
 		generateChildrenCategories,
 		generateTopicClass,
@@ -18,11 +21,19 @@ module.exports = function (utils, Benchpress, relative_path) {
 		spawnPrivilegeStates,
 		localeToHTML,
 		renderTopicImage,
-		renderTopicEvents,
-		renderEvents,
 		renderDigestAvatar,
 		userAgentIcons,
 		buildAvatar,
+		increment,
+		generateWroteReplied,
+		generateRepliedTo,
+		generateWrote,
+		isoTimeToLocaleString,
+		shouldHideReplyContainer,
+		humanReadableNumber,
+		formattedNumber,
+		txEscape,
+		generatePlaceholderWave,
 		register,
 		__escape: identity,
 	};
@@ -81,6 +92,26 @@ module.exports = function (utils, Benchpress, relative_path) {
 		return utils.stripHTMLTags(str);
 	}
 
+	function buildCategoryIcon(category, size, rounded) {
+		if (!category) {
+			return '';
+		}
+
+		return `<span class="icon d-inline-flex justify-content-center align-items-center align-middle ${rounded}" style="${generateCategoryBackground(category)} width:${size}; height: ${size}; font-size: ${parseInt(size, 10) / 2}px;">${category.icon ? `<i class="fa fa-fw ${category.icon}"></i>` : ''}</span>`;
+	}
+
+	function buildCategoryLabel(category, tag = 'a', className = '') {
+		if (!category) {
+			return '';
+		}
+
+		const href = tag === 'a' ? `href="${relative_path}/category/${category.slug}"` : '';
+		return `<${tag} ${href} class="badge px-1 text-truncate text-decoration-none ${className}" style="color: ${category.color};background-color: ${category.bgColor};border-color: ${category.bgColor}!important; max-width: 70vw;">
+			${category.icon && category.icon !== 'fa-nbb-none' ? `<i class="fa fa-fw ${category.icon}"></i>` : ''}
+			${category.name}
+		</${tag}>`;
+	}
+
 	function generateCategoryBackground(category) {
 		if (!category) {
 			return '';
@@ -89,6 +120,7 @@ module.exports = function (utils, Benchpress, relative_path) {
 
 		if (category.bgColor) {
 			style.push('background-color: ' + category.bgColor);
+			style.push(`border-color: ${category.bgColor}!important`);
 		}
 
 		if (category.color) {
@@ -113,8 +145,8 @@ module.exports = function (utils, Benchpress, relative_path) {
 		category.children.forEach(function (child) {
 			if (child && !child.isSection) {
 				const link = child.link ? child.link : (relative_path + '/category/' + child.slug);
-				html += '<span class="category-children-item pull-left">' +
-					'<div role="presentation" class="icon pull-left" style="' + generateCategoryBackground(child) + '">' +
+				html += '<span class="category-children-item float-start">' +
+					'<div role="presentation" class="icon float-start" style="' + generateCategoryBackground(child) + '">' +
 					'<i class="fa fa-fw ' + child.icon + '"></i>' +
 					'</div>' +
 					'<a href="' + link + '"><small>' + child.name + '</small></a></span>';
@@ -130,28 +162,29 @@ module.exports = function (utils, Benchpress, relative_path) {
 	}
 
 	// Groups helpers
-	function membershipBtn(groupObj) {
+	function membershipBtn(groupObj, btnClass = '') {
 		if (groupObj.isMember && groupObj.name !== 'administrators') {
-			return '<button class="btn btn-danger" data-action="leave" data-group="' + groupObj.displayName + '"' + (groupObj.disableLeave ? ' disabled' : '') + '><i class="fa fa-times"></i> [[groups:membership.leave-group]]</button>';
+			return `<button class="btn btn-danger ${btnClass}" data-action="leave" data-group="${groupObj.displayName}" ${(groupObj.disableLeave ? ' disabled' : '')}><i class="fa fa-times"></i> [[groups:membership.leave-group]]</button>`;
 		}
 
 		if (groupObj.isPending && groupObj.name !== 'administrators') {
-			return '<button class="btn btn-warning disabled"><i class="fa fa-clock-o"></i> [[groups:membership.invitation-pending]]</button>';
+			return `<button class="btn btn-warning disabled ${btnClass}"><i class="fa fa-clock-o"></i> [[groups:membership.invitation-pending]]</button>`;
 		} else if (groupObj.isInvited) {
-			return '<button class="btn btn-link" data-action="rejectInvite" data-group="' + groupObj.displayName + '">[[groups:membership.reject]]</button><button class="btn btn-success" data-action="acceptInvite" data-group="' + groupObj.name + '"><i class="fa fa-plus"></i> [[groups:membership.accept-invitation]]</button>';
+			return `<button class="btn btn-warning" data-action="rejectInvite" data-group="${groupObj.displayName}">[[groups:membership.reject]]</button><button class="btn btn-success" data-action="acceptInvite" data-group="${groupObj.name}"><i class="fa fa-plus"></i> [[groups:membership.accept-invitation]]</button>`;
 		} else if (!groupObj.disableJoinRequests && groupObj.name !== 'administrators') {
-			return '<button class="btn btn-success" data-action="join" data-group="' + groupObj.displayName + '"><i class="fa fa-plus"></i> [[groups:membership.join-group]]</button>';
+			return `<button class="btn btn-success ${btnClass}" data-action="join" data-group="${groupObj.displayName}"><i class="fa fa-plus"></i> [[groups:membership.join-group]]</button>`;
 		}
 		return '';
 	}
 
-	function spawnPrivilegeStates(member, privileges) {
+	function spawnPrivilegeStates(member, privileges, types) {
 		const states = [];
 		for (const priv in privileges) {
 			if (privileges.hasOwnProperty(priv)) {
 				states.push({
 					name: priv,
 					state: privileges[priv],
+					type: types[priv],
 				});
 			}
 		}
@@ -164,7 +197,13 @@ module.exports = function (utils, Benchpress, relative_path) {
 				(member === 'spiders' && !spidersEnabled.includes(priv.name)) ||
 				(member === 'Global Moderators' && globalModDisabled.includes(priv.name));
 
-			return '<td class="text-center" data-privilege="' + priv.name + '" data-value="' + priv.state + '"><input autocomplete="off" type="checkbox"' + (priv.state ? ' checked' : '') + (disabled ? ' disabled="disabled"' : '') + ' /></td>';
+			return `
+				<td data-privilege="${priv.name}" data-value="${priv.state}" data-type="${priv.type}">
+					<div class="form-check text-center">
+						<input class="form-check-input float-none" autocomplete="off" type="checkbox"${(priv.state ? ' checked' : '')}${(disabled ? ' disabled="disabled"' : '')} />
+					</div>
+				</td>
+			`;
 		}).join('');
 	}
 
@@ -178,49 +217,6 @@ module.exports = function (utils, Benchpress, relative_path) {
 			return '<img src="' + topicObj.thumb + '" class="img-circle user-img" title="' + topicObj.user.username + '" />';
 		}
 		return '<img component="user/picture" data-uid="' + topicObj.user.uid + '" src="' + topicObj.user.picture + '" class="user-img" title="' + topicObj.user.username + '" />';
-	}
-
-	function renderTopicEvents(index, sort) {
-		if (sort === 'most_votes') {
-			return '';
-		}
-		const start = this.posts[index].eventStart;
-		const end = this.posts[index].eventEnd;
-		const events = this.events.filter(event => event.timestamp >= start && event.timestamp < end);
-		if (!events.length) {
-			return '';
-		}
-
-		return renderEvents.call(this, events);
-	}
-
-	function renderEvents(events) {
-		return events.reduce((html, event) => {
-			html += `<li component="topic/event" class="timeline-event" data-topic-event-id="${event.id}" data-topic-event-type="${event.type}">
-				<div class="timeline-badge">
-					<i class="fa ${event.icon || 'fa-circle'}"></i>
-				</div>
-				<span class="timeline-text">
-					${event.href ? `<a href="${relative_path}${event.href}">${event.text}</a>` : event.text}&nbsp;
-				</span>
-			`;
-
-			if (event.user) {
-				if (!event.user.system) {
-					html += `<span><a href="${relative_path}/user/${event.user.userslug}">${buildAvatar(event.user, 'xs', true)}&nbsp;${event.user.username}</a></span>&nbsp;`;
-				} else {
-					html += `<span class="timeline-text">[[global:system-user]]</span>&nbsp;`;
-				}
-			}
-
-			html += `<span class="timeago timeline-text" title="${event.timestampISO}"></span>`;
-
-			if (this.privileges.isAdminOrMod) {
-				html += `&nbsp;<span component="topic/event/delete" data-topic-event-id="${event.id}" data-topic-event-type="${event.type} class="timeline-text pointer" title="[[topic:delete-event]]"><i class="fa fa-trash"></i></span>`;
-			}
-
-			return html;
-		}, '');
 	}
 
 	function renderDigestAvatar(block) {
@@ -292,7 +288,7 @@ module.exports = function (utils, Benchpress, relative_path) {
 		/**
 		 * userObj requires:
 		 *   - uid, picture, icon:bgColor, icon:text (getUserField w/ "picture" should return all 4), username
-		 * size: one of "xs", "sm", "md", "lg", or "xl" (required), or an integer
+		 * size: a picture size in the form of a value with units (e.g. 64px, 4rem, etc.)
 		 * rounded: true or false (optional, default false)
 		 * classNames: additional class names to prepend (optional, default none)
 		 * component: overrides the default component (optional, default none)
@@ -302,39 +298,92 @@ module.exports = function (utils, Benchpress, relative_path) {
 		if (!userObj) {
 			userObj = this;
 		}
-
-		const attributes = [
-			'alt="' + userObj.username + '"',
-			'title="' + userObj.username + '"',
-			'data-uid="' + userObj.uid + '"',
-			'loading="lazy"',
-		];
-		const styles = [];
 		classNames = classNames || '';
+		const attributes = new Map([
+			['title', userObj.username],
+			['data-uid', userObj.uid],
+			['class', `avatar ${classNames}${rounded ? ' avatar-rounded' : ''}`],
+		]);
+		const styles = [`--avatar-size: ${size};`];
+		const attr2String = attributes => Array.from(attributes).reduce((output, [prop, value]) => {
+			output += ` ${prop}="${value}"`;
+			return output;
+		}, '');
 
-		// Validate sizes, handle integers, otherwise fall back to `avatar-sm`
-		if (['xs', 'sm', 'sm2x', 'md', 'lg', 'xl'].includes(size)) {
-			classNames += ' avatar-' + size;
-		} else if (!isNaN(parseInt(size, 10))) {
-			styles.push('width: ' + size + 'px;', 'height: ' + size + 'px;', 'line-height: ' + size + 'px;', 'font-size: ' + (parseInt(size, 10) / 16) + 'rem;');
-		} else {
-			classNames += ' avatar-sm';
-		}
-		attributes.unshift('class="avatar ' + classNames + (rounded ? ' avatar-rounded' : '') + '"');
-
-		// Component override
-		if (component) {
-			attributes.push('component="' + component + '"');
-		} else {
-			attributes.push('component="avatar/' + (userObj.picture ? 'picture' : 'icon') + '"');
-		}
+		let output = '';
 
 		if (userObj.picture) {
-			return '<img ' + attributes.join(' ') + ' src="' + userObj.picture + '" style="' + styles.join(' ') + '" />';
+			output += `<img${attr2String(attributes)} alt="${userObj.username}" loading="lazy" component="${component || 'avatar/picture'}" src="${userObj.picture}" style="${styles.join(' ')}" onError="this.remove()" itemprop="image" />`;
+		}
+		output += `<span${attr2String(attributes)} component="${component || 'avatar/icon'}" style="${styles.join(' ')} background-color: ${userObj['icon:bgColor']}">${userObj['icon:text']}</span>`;
+		return output;
+	}
+
+	function increment(value, inc) {
+		return String(value + parseInt(inc, 10));
+	}
+
+	function generateWroteReplied(post, timeagoCutoff) {
+		if (post.toPid) {
+			return generateRepliedTo(post, timeagoCutoff);
+		}
+		return generateWrote(post, timeagoCutoff);
+	}
+
+	function generateRepliedTo(post, timeagoCutoff) {
+		const displayname = post.parent && post.parent.displayname ?
+			post.parent.displayname : '[[global:guest]]';
+		const isBeforeCutoff = post.timestamp < (Date.now() - (timeagoCutoff * oneDayInMs));
+		const langSuffix = isBeforeCutoff ? 'on' : 'ago';
+		return `[[topic:replied-to-user-${langSuffix}, ${post.toPid}, ${relative_path}/post/${post.toPid}, ${displayname}, ${relative_path}/post/${post.pid}, ${post.timestampISO}]]`;
+	}
+
+	function generateWrote(post, timeagoCutoff) {
+		const isBeforeCutoff = post.timestamp < (Date.now() - (timeagoCutoff * oneDayInMs));
+		const langSuffix = isBeforeCutoff ? 'on' : 'ago';
+		return `[[topic:wrote-${langSuffix}, ${relative_path}/post/${post.pid}, ${post.timestampISO}]]`;
+	}
+
+	function isoTimeToLocaleString(isoTime, locale = 'en-GB') {
+		return new Date(isoTime).toLocaleString([locale], {
+			dateStyle: 'short',
+			timeStyle: 'short',
+		}).replace(/,/g, '&#44;');
+	}
+
+	function shouldHideReplyContainer(post) {
+		if (post.replies.count <= 0 || post.replies.hasSingleImmediateReply) {
+			return true;
 		}
 
-		styles.push('background-color: ' + userObj['icon:bgColor'] + ';');
-		return '<span ' + attributes.join(' ') + ' style="' + styles.join(' ') + '">' + userObj['icon:text'] + '</span>';
+		return false;
+	}
+
+	function humanReadableNumber(number, toFixed = 1) {
+		return utils.makeNumberHumanReadable(number, toFixed);
+	}
+
+	function formattedNumber(number) {
+		return utils.addCommas(number);
+	}
+
+	function txEscape(text) {
+		return String(text).replace(/%/g, '&#37;').replace(/,/g, '&#44;');
+	}
+
+	function generatePlaceholderWave(items) {
+		const html = items.map((i) => {
+			if (i === 'divider') {
+				return '<li class="dropdown-divider"></li>';
+			}
+			return `
+			<li class="dropdown-item placeholder-wave">
+				<div class="placeholder" style="width: 20px;"></div>
+				<div class="placeholder col-${i}"></div>
+			</li>`;
+		});
+
+		return html;
 	}
 
 	function register() {

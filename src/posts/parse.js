@@ -10,30 +10,28 @@ const meta = require('../meta');
 const plugins = require('../plugins');
 const translator = require('../translator');
 const utils = require('../utils');
+const postCache = require('./cache');
 
 let sanitizeConfig = {
 	allowedTags: sanitize.defaults.allowedTags.concat([
 		// Some safe-to-use tags to add
-		'sup', 'ins', 'del', 'img', 'button',
-		'video', 'audio', 'iframe', 'embed',
-		// 'sup' still necessary until https://github.com/apostrophecms/sanitize-html/pull/422 merged
+		'ins', 'del', 'img', 'button',
+		'video', 'audio', 'source', 'iframe', 'embed',
 	]),
 	allowedAttributes: {
 		...sanitize.defaults.allowedAttributes,
 		a: ['href', 'name', 'hreflang', 'media', 'rel', 'target', 'type'],
 		img: ['alt', 'height', 'ismap', 'src', 'usemap', 'width', 'srcset'],
-		iframe: ['height', 'name', 'src', 'width'],
-		video: ['autoplay', 'controls', 'height', 'loop', 'muted', 'poster', 'preload', 'src', 'width'],
+		iframe: ['height', 'name', 'src', 'width', 'allow', 'frameborder'],
+		video: ['autoplay', 'playsinline', 'controls', 'height', 'loop', 'muted', 'poster', 'preload', 'src', 'width'],
 		audio: ['autoplay', 'controls', 'loop', 'muted', 'preload', 'src'],
+		source: ['type', 'src', 'srcset', 'sizes', 'media', 'height', 'width'],
 		embed: ['height', 'src', 'type', 'width'],
 	},
-	globalAttributes: ['accesskey', 'class', 'contenteditable', 'dir',
+	nonBooleanAttributes: ['accesskey', 'class', 'contenteditable', 'dir',
 		'draggable', 'dropzone', 'hidden', 'id', 'lang', 'spellcheck', 'style',
-		'tabindex', 'title', 'translate', 'aria-expanded', 'data-*',
+		'tabindex', 'title', 'translate', 'aria-*', 'data-*',
 	],
-	allowedClasses: {
-		...sanitize.defaults.allowedClasses,
-	},
 };
 
 module.exports = function (Posts) {
@@ -52,7 +50,7 @@ module.exports = function (Posts) {
 			return postData;
 		}
 		postData.content = String(postData.content || '');
-		const cache = require('./cache');
+		const cache = postCache.getOrCreate();
 		const pid = String(postData.pid);
 		const cachedContent = cache.get(pid);
 		if (postData.pid && cachedContent !== undefined) {
@@ -121,7 +119,7 @@ module.exports = function (Posts) {
 		sanitizeConfig.allowedTags.forEach((tag) => {
 			sanitizeConfig.allowedAttributes[tag] = _.union(
 				sanitizeConfig.allowedAttributes[tag],
-				sanitizeConfig.globalAttributes
+				sanitizeConfig.nonBooleanAttributes
 			);
 		});
 

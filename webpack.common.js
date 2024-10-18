@@ -34,9 +34,16 @@ module.exports = {
 			},
 		},
 	},
+	snapshot: {
+		managedPaths: [new RegExp(`^(.+?[\\\\/]node_modules)[\\\\/](?!${activePlugins.join('|')})`)],
+	},
 	watchOptions: {
 		poll: 500,
 		aggregateTimeout: 250,
+	},
+	performance: {
+		maxEntrypointSize: 512000,
+		maxAssetSize: 1024000,
 	},
 	resolve: {
 		symlinks: false,
@@ -52,7 +59,6 @@ module.exports = {
 			admin: path.resolve(__dirname, 'build/public/src/admin'),
 			vendor: path.resolve(__dirname, 'public/vendor'),
 			benchpress: path.resolve(__dirname, 'node_modules/benchpressjs'),
-			Chart: path.resolve(__dirname, 'node_modules/chart.js'),
 			Sortable: path.resolve(__dirname, 'node_modules/sortablejs'),
 			cropper: path.resolve(__dirname, 'node_modules/cropperjs'),
 			'jquery-ui/widgets': path.resolve(__dirname, 'node_modules/jquery-ui/ui/widgets'),

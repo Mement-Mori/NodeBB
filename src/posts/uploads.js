@@ -64,10 +64,10 @@ module.exports = function (Posts) {
 		if (isMainPost) {
 			const tid = await Posts.getPostField(pid, 'tid');
 			let thumbs = await topics.thumbs.get(tid);
-			const replacePath = path.posix.join(`${nconf.get('relative_path')}${nconf.get('upload_url')}/`);
-			thumbs = thumbs.map(thumb => thumb.url.replace(replacePath, '')).filter(path => !validator.isURL(path, {
+			thumbs = thumbs.map(thumb => thumb.path).filter(path => !validator.isURL(path, {
 				require_protocol: true,
 			}));
+			thumbs = thumbs.map(t => t.slice(1)); // remove leading `/` or `\\` on windows
 			uploads.push(...thumbs);
 		}
 
@@ -124,10 +124,9 @@ module.exports = function (Posts) {
 		}));
 		orphans = orphans.filter(Boolean);
 
-		// Note: no await. Deletion not guaranteed by method end.
-		orphans.forEach((relPath) => {
-			file.delete(_getFullPath(relPath));
-		});
+		await Promise.all(orphans.map(async (relPath) => {
+			await file.delete(_getFullPath(relPath));
+		}));
 
 		return orphans;
 	};
@@ -143,6 +142,14 @@ module.exports = function (Posts) {
 			filePaths = [filePaths];
 		}
 
+		if (process.platform === 'win32') {
+			// windows path => 'files\\1685368788211-1-profileimg.jpg'
+			// turn it into => 'files/1685368788211-1-profileimg.jpg'
+			filePaths.forEach((file) => {
+				file.path = file.path.split(path.sep).join(path.posix.sep);
+			});
+		}
+
 		const keys = filePaths.map(fileObj => `upload:${md5(fileObj.path.replace('-resized', ''))}:pids`);
 		return await Promise.all(keys.map(k => db.getSortedSetRange(k, 0, -1)));
 	};
@@ -156,7 +163,7 @@ module.exports = function (Posts) {
 		filePaths = await _filterValidPaths(filePaths); // Only process files that exist and are within uploads directory
 
 		const now = Date.now();
-		const scores = filePaths.map(() => now);
+		const scores = filePaths.map((p, i) => now + i);
 		const bulkAdd = filePaths.map(path => [`upload:${md5(path)}:pids`, now, pid]);
 		await Promise.all([
 			db.sortedSetAdd(`post:${pid}:uploads`, scores, filePaths),

@@ -27,7 +27,7 @@ define('messages', ['bootbox', 'translator', 'storage', 'alerts', 'hooks'], func
 			},
 		};
 
-		if (!app.user.email) {
+		if (!app.user.email && !app.user.isEmailConfirmSent) {
 			msg.message = '[[error:no-email-to-confirm]]';
 			msg.clickfn = function () {
 				alerts.remove('email_confirm');
@@ -80,8 +80,8 @@ define('messages', ['bootbox', 'translator', 'storage', 'alerts', 'hooks'], func
 		if (showWelcomeMessage) {
 			alerts.alert({
 				type: 'success',
-				title: '[[global:welcome_back]] ' + app.user.username + '!',
-				message: '[[global:you_have_successfully_logged_in]]',
+				title: '[[global:welcome-back]] ' + app.user.username + '!',
+				message: '[[global:you-have-successfully-logged-in]]',
 				timeout: 5000,
 			});
 

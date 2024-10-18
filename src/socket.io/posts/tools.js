@@ -14,19 +14,20 @@ const utils = require('../../utils');
 
 module.exports = function (SocketPosts) {
 	SocketPosts.loadPostTools = async function (socket, data) {
-		if (!data || !data.pid || !data.cid) {
+		if (!data || !data.pid) {
 			throw new Error('[[error:invalid-data]]');
 		}
-
+		const cid = await posts.getCidByPid(data.pid);
 		const results = await utils.promiseParallel({
 			posts: posts.getPostFields(data.pid, ['deleted', 'bookmarks', 'uid', 'ip', 'flagId']),
 			isAdmin: user.isAdministrator(socket.uid),
 			isGlobalMod: user.isGlobalModerator(socket.uid),
-			isModerator: user.isModerator(socket.uid, data.cid),
+			isModerator: user.isModerator(socket.uid, cid),
 			canEdit: privileges.posts.canEdit(data.pid, socket.uid),
 			canDelete: privileges.posts.canDelete(data.pid, socket.uid),
 			canPurge: privileges.posts.canPurge(data.pid, socket.uid),
 			canFlag: privileges.posts.canFlag(data.pid, socket.uid),
+			canViewHistory: privileges.posts.can('posts:history', data.pid, socket.uid),
 			flagged: flags.exists('post', data.pid, socket.uid), // specifically, whether THIS calling user flagged
 			bookmarked: posts.hasBookmarked(data.pid, socket.uid),
 			postSharing: social.getActivePostSharing(),
@@ -46,7 +47,7 @@ module.exports = function (SocketPosts) {
 		postData.display_move_tools = results.isAdmin || results.isModerator;
 		postData.display_change_owner_tools = results.isAdmin || results.isModerator;
 		postData.display_ip_ban = (results.isAdmin || results.isGlobalMod) && !postData.selfPost;
-		postData.display_history = results.history;
+		postData.display_history = results.history && results.canViewHistory;
 		postData.flags = {
 			flagId: parseInt(results.posts.flagId, 10) || null,
 			can: results.canFlag.flag,

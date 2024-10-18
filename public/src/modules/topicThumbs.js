@@ -21,7 +21,7 @@ define('topicThumbs', [
 
 	Thumbs.upload = id => new Promise((resolve) => {
 		uploader.show({
-			title: '[[topic:composer.thumb_title]]',
+			title: '[[topic:composer.thumb-title]]',
 			method: 'put',
 			route: config.relative_path + `/api/v3/topics/${id}/thumbs`,
 		}, function (url) {
@@ -55,6 +55,8 @@ define('topicThumbs', [
 					modal = bootbox.dialog({
 						title: '[[modules:thumbs.modal.title]]',
 						message: html,
+						onEscape: true,
+						backdrop: true,
 						buttons: {
 							add: {
 								label: '<i class="fa fa-plus"></i> [[modules:thumbs.modal.add]]',
@@ -85,7 +87,7 @@ define('topicThumbs', [
 
 	Thumbs.modal.handleDelete = (payload) => {
 		const modalEl = payload.modal.get(0);
-
+		const { id: uuid } = payload;
 		modalEl.addEventListener('click', (ev) => {
 			if (ev.target.closest('button[data-action="remove"]')) {
 				bootbox.confirm('[[modules:thumbs.modal.confirm-remove]]', (ok) => {
@@ -93,12 +95,15 @@ define('topicThumbs', [
 						return;
 					}
 
-					const id = ev.target.closest('.media[data-id]').getAttribute('data-id');
-					const path = ev.target.closest('.media[data-path]').getAttribute('data-path');
+					const id = ev.target.closest('[data-id]').getAttribute('data-id');
+					const path = ev.target.closest('[data-path]').getAttribute('data-path');
 					api.del(`/topics/${id}/thumbs`, {
 						path: path,
 					}).then(() => {
 						Thumbs.modal.open(payload);
+						require(['composer'], (composer) => {
+							composer.updateThumbCount(uuid, $(`[component="composer"][data-uuid="${uuid}"]`));
+						});
 					}).catch(alerts.error);
 				});
 			}

@@ -3,11 +3,14 @@
 const validator = require('validator');
 const _ = require('lodash');
 
+const db = require('../database');
 const utils = require('../utils');
 const user = require('../user');
 const posts = require('../posts');
+const postsCache = require('../posts/cache');
 const topics = require('../topics');
 const groups = require('../groups');
+const plugins = require('../plugins');
 const meta = require('../meta');
 const events = require('../events');
 const privileges = require('../privileges');
@@ -23,23 +26,61 @@ postsAPI.get = async function (caller, data) {
 		posts.getPostData(data.pid),
 		posts.hasVoted(data.pid, caller.uid),
 	]);
-	if (!post) {
-		return null;
-	}
-	Object.assign(post, voted);
-
 	const userPrivilege = userPrivileges[0];
-	if (!userPrivilege.read || !userPrivilege['topics:read']) {
+
+	if (!post || !userPrivilege.read || !userPrivilege['topics:read']) {
 		return null;
 	}
 
+	Object.assign(post, voted);
 	post.ip = userPrivilege.isAdminOrMod ? post.ip : undefined;
+
 	const selfPost = caller.uid && caller.uid === parseInt(post.uid, 10);
 	if (post.deleted && !(userPrivilege.isAdminOrMod || selfPost)) {
-		post.content = '[[topic:post_is_deleted]]';
+		post.content = '[[topic:post-is-deleted]]';
 	}
 
 	return post;
+};
+
+postsAPI.getIndex = async (caller, { pid, sort }) => {
+	const tid = await posts.getPostField(pid, 'tid');
+	const topicPrivileges = await privileges.topics.get(tid, caller.uid);
+	if (!topicPrivileges.read || !topicPrivileges['topics:read']) {
+		return null;
+	}
+
+	return await posts.getPidIndex(pid, tid, sort);
+};
+
+postsAPI.getSummary = async (caller, { pid }) => {
+	const tid = await posts.getPostField(pid, 'tid');
+	const topicPrivileges = await privileges.topics.get(tid, caller.uid);
+	if (!topicPrivileges.read || !topicPrivileges['topics:read']) {
+		return null;
+	}
+
+	const postsData = await posts.getPostSummaryByPids([pid], caller.uid, { stripTags: false });
+	posts.modifyPostByPrivilege(postsData[0], topicPrivileges);
+	return postsData[0];
+};
+
+postsAPI.getRaw = async (caller, { pid }) => {
+	const userPrivileges = await privileges.posts.get([pid], caller.uid);
+	const userPrivilege = userPrivileges[0];
+	if (!userPrivilege['topics:read']) {
+		return null;
+	}
+
+	const postData = await posts.getPostFields(pid, ['content', 'deleted']);
+	const selfPost = caller.uid && caller.uid === parseInt(postData.uid, 10);
+
+	if (postData.deleted && !(userPrivilege.isAdminOrMod || selfPost)) {
+		return null;
+	}
+	postData.pid = pid;
+	const result = await plugins.hooks.fire('filter:post.getRawPost', { uid: caller.uid, postData: postData });
+	return result.postData.content;
 };
 
 postsAPI.edit = async function (caller, data) {
@@ -60,6 +101,8 @@ postsAPI.edit = async function (caller, data) {
 		throw new Error(`[[error:content-too-short, ${meta.config.minimumPostLength}]]`);
 	} else if (contentLen > meta.config.maximumPostLength) {
 		throw new Error(`[[error:content-too-long, ${meta.config.maximumPostLength}]]`);
+	} else if (!await posts.canUserPostContentWithLinks(caller.uid, data.content)) {
+		throw new Error(`[[error:not-enough-reputation-to-post-links, ${meta.config['min:rep:post-links']}]]`);
 	}
 
 	data.uid = caller.uid;
@@ -183,7 +226,7 @@ postsAPI.purge = async function (caller, data) {
 	if (!canPurge) {
 		throw new Error('[[error:no-privileges]]');
 	}
-	require('../posts/cache').del(data.pid);
+	postsCache.del(data.pid);
 	await posts.purge(data.pid, caller.uid);
 
 	websockets.in(`topic_${postData.tid}`).emit('event:post_purged', postData);
@@ -249,12 +292,12 @@ postsAPI.move = async function (caller, data) {
 	]);
 
 	if (!postDeleted && !topicDeleted) {
-		socketHelpers.sendNotificationToPostOwner(data.pid, caller.uid, 'move', 'notifications:moved_your_post');
+		socketHelpers.sendNotificationToPostOwner(data.pid, caller.uid, 'move', 'notifications:moved-your-post');
 	}
 };
 
 postsAPI.upvote = async function (caller, data) {
-	return await apiHelpers.postCommand(caller, 'upvote', 'voted', 'notifications:upvoted_your_post_in', data);
+	return await apiHelpers.postCommand(caller, 'upvote', 'voted', 'notifications:upvoted-your-post-in', data);
 };
 
 postsAPI.downvote = async function (caller, data) {
@@ -264,6 +307,103 @@ postsAPI.downvote = async function (caller, data) {
 postsAPI.unvote = async function (caller, data) {
 	return await apiHelpers.postCommand(caller, 'unvote', 'voted', '', data);
 };
+
+postsAPI.getVoters = async function (caller, data) {
+	if (!data || !data.pid) {
+		throw new Error('[[error:invalid-data]]');
+	}
+	const { pid } = data;
+	const cid = await posts.getCidByPid(pid);
+	const [canSeeUpvotes, canSeeDownvotes] = await Promise.all([
+		canSeeVotes(caller.uid, cid, 'upvoteVisibility'),
+		canSeeVotes(caller.uid, cid, 'downvoteVisibility'),
+	]);
+
+	if (!canSeeUpvotes && !canSeeDownvotes) {
+		throw new Error('[[error:no-privileges]]');
+	}
+	const repSystemDisabled = meta.config['reputation:disabled'];
+	const showUpvotes = canSeeUpvotes && !repSystemDisabled;
+	const showDownvotes = canSeeDownvotes && !meta.config['downvote:disabled'] && !repSystemDisabled;
+	const [upvoteUids, downvoteUids] = await Promise.all([
+		showUpvotes ? db.getSetMembers(`pid:${data.pid}:upvote`) : [],
+		showDownvotes ? db.getSetMembers(`pid:${data.pid}:downvote`) : [],
+	]);
+
+	const [upvoters, downvoters] = await Promise.all([
+		user.getUsersFields(upvoteUids, ['username', 'userslug', 'picture']),
+		user.getUsersFields(downvoteUids, ['username', 'userslug', 'picture']),
+	]);
+
+	return {
+		upvoteCount: upvoters.length,
+		downvoteCount: downvoters.length,
+		showUpvotes: showUpvotes,
+		showDownvotes: showDownvotes,
+		upvoters: upvoters,
+		downvoters: downvoters,
+	};
+};
+
+postsAPI.getUpvoters = async function (caller, data) {
+	if (!data.pid) {
+		throw new Error('[[error:invalid-data]]');
+	}
+	const { pid } = data;
+	const cid = await posts.getCidByPid(pid);
+	if (!await canSeeVotes(caller.uid, cid, 'upvoteVisibility')) {
+		throw new Error('[[error:no-privileges]]');
+	}
+
+	let upvotedUids = (await posts.getUpvotedUidsByPids([pid]))[0];
+	const cutoff = 6;
+	if (!upvotedUids.length) {
+		return {
+			otherCount: 0,
+			usernames: [],
+			cutoff,
+		};
+	}
+	let otherCount = 0;
+	if (upvotedUids.length > cutoff) {
+		otherCount = upvotedUids.length - (cutoff - 1);
+		upvotedUids = upvotedUids.slice(0, cutoff - 1);
+	}
+
+	const usernames = await user.getUsernamesByUids(upvotedUids);
+	return {
+		otherCount,
+		usernames,
+		cutoff,
+	};
+};
+
+async function canSeeVotes(uid, cids, type) {
+	const isArray = Array.isArray(cids);
+	if (!isArray) {
+		cids = [cids];
+	}
+	const uniqCids = _.uniq(cids);
+	const [canRead, isAdmin, isMod] = await Promise.all([
+		privileges.categories.isUserAllowedTo(
+			'topics:read', uniqCids, uid
+		),
+		privileges.users.isAdministrator(uid),
+		privileges.users.isModerator(uid, cids),
+	]);
+	const cidToAllowed = _.zipObject(uniqCids, canRead);
+	const checks = cids.map(
+		(cid, index) => isAdmin || isMod[index] ||
+		(
+			cidToAllowed[cid] &&
+			(
+				meta.config[type] === 'all' ||
+				(meta.config[type] === 'loggedin' && parseInt(uid, 10) > 0)
+			)
+		)
+	);
+	return isArray ? checks : checks[0];
+}
 
 postsAPI.bookmark = async function (caller, data) {
 	return await apiHelpers.postCommand(caller, 'bookmark', 'bookmarked', '', data);
@@ -332,4 +472,43 @@ postsAPI.restoreDiff = async (caller, data) => {
 
 	const edit = await posts.diffs.restore(data.pid, data.since, caller.uid, apiHelpers.buildReqObject(caller));
 	websockets.in(`topic_${edit.topic.tid}`).emit('event:post_edited', edit);
+};
+
+postsAPI.deleteDiff = async (caller, { pid, timestamp }) => {
+	const cid = await posts.getCidByPid(pid);
+	const [isAdmin, isModerator] = await Promise.all([
+		privileges.users.isAdministrator(caller.uid),
+		privileges.users.isModerator(caller.uid, cid),
+	]);
+
+	if (!(isAdmin || isModerator)) {
+		throw new Error('[[error:no-privileges]]');
+	}
+
+	await posts.diffs.delete(pid, timestamp, caller.uid);
+};
+
+postsAPI.getReplies = async (caller, { pid }) => {
+	if (!utils.isNumber(pid)) {
+		throw new Error('[[error:invalid-data]]');
+	}
+	const { uid } = caller;
+	const canRead = await privileges.posts.can('topics:read', pid, caller.uid);
+	if (!canRead) {
+		return null;
+	}
+
+	const { topicPostSort } = await user.getSettings(uid);
+	const pids = await posts.getPidsFromSet(`pid:${pid}:replies`, 0, -1, topicPostSort === 'newest_to_oldest');
+
+	let [postData, postPrivileges] = await Promise.all([
+		posts.getPostsByPids(pids, uid),
+		privileges.posts.get(pids, uid),
+	]);
+	postData = await topics.addPostData(postData, uid);
+	postData.forEach((postData, index) => posts.modifyPostByPrivilege(postData, postPrivileges[index]));
+	postData = postData.filter((postData, index) => postData && postPrivileges[index].read);
+	postData = await user.blocks.filter(uid, postData);
+
+	return postData;
 };

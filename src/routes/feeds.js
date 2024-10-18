@@ -9,11 +9,12 @@ const topics = require('../topics');
 const user = require('../user');
 const categories = require('../categories');
 const meta = require('../meta');
-const helpers = require('../controllers/helpers');
+const controllerHelpers = require('../controllers/helpers');
 const privileges = require('../privileges');
 const db = require('../database');
 const utils = require('../utils');
 const controllers404 = require('../controllers/404');
+const routeHelpers = require('./helpers');
 
 const terms = {
 	daily: 'day',
@@ -23,18 +24,18 @@ const terms = {
 };
 
 module.exports = function (app, middleware) {
-	app.get('/topic/:topic_id.rss', middleware.maintenanceMode, generateForTopic);
-	app.get('/category/:category_id.rss', middleware.maintenanceMode, generateForCategory);
-	app.get('/topics.rss', middleware.maintenanceMode, generateForTopics);
-	app.get('/recent.rss', middleware.maintenanceMode, generateForRecent);
-	app.get('/top.rss', middleware.maintenanceMode, generateForTop);
-	app.get('/top/:term.rss', middleware.maintenanceMode, generateForTop);
-	app.get('/popular.rss', middleware.maintenanceMode, generateForPopular);
-	app.get('/popular/:term.rss', middleware.maintenanceMode, generateForPopular);
-	app.get('/recentposts.rss', middleware.maintenanceMode, generateForRecentPosts);
-	app.get('/category/:category_id/recentposts.rss', middleware.maintenanceMode, generateForCategoryRecentPosts);
-	app.get('/user/:userslug/topics.rss', middleware.maintenanceMode, generateForUserTopics);
-	app.get('/tags/:tag.rss', middleware.maintenanceMode, generateForTag);
+	app.get('/topic/:topic_id.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForTopic));
+	app.get('/category/:category_id.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForCategory));
+	app.get('/topics.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForTopics));
+	app.get('/recent.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForRecent));
+	app.get('/top.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForTop));
+	app.get('/top/:term.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForTop));
+	app.get('/popular.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForPopular));
+	app.get('/popular/:term.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForPopular));
+	app.get('/recentposts.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForRecentPosts));
+	app.get('/category/:category_id/recentposts.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForCategoryRecentPosts));
+	app.get('/user/:userslug/topics.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForUserTopics));
+	app.get('/tags/:tag.rss', middleware.maintenanceMode, routeHelpers.tryRoute(generateForTag));
 };
 
 async function validateTokenIfRequiresLogin(requiresLogin, cid, req, res) {
@@ -46,16 +47,16 @@ async function validateTokenIfRequiresLogin(requiresLogin, cid, req, res) {
 	}
 
 	if (uid <= 0 || !token) {
-		return helpers.notAllowed(req, res);
+		return controllerHelpers.notAllowed(req, res);
 	}
 	const userToken = await db.getObjectField(`user:${uid}`, 'rss_token');
 	if (userToken !== token) {
 		await user.auth.logAttempt(uid, req.ip);
-		return helpers.notAllowed(req, res);
+		return controllerHelpers.notAllowed(req, res);
 	}
 	const userPrivileges = await privileges.categories.get(cid, uid);
 	if (!userPrivileges.read) {
-		return helpers.notAllowed(req, res);
+		return controllerHelpers.notAllowed(req, res);
 	}
 	return true;
 }
@@ -127,7 +128,7 @@ async function generateForCategory(req, res, next) {
 		db.getSortedSetRevIntersect({
 			sets: ['topics:tid', `cid:${cid}:tids:lastposttime`],
 			start: 0,
-			stop: 25,
+			stop: 24,
 			weights: [1, 0],
 		}),
 	]);
@@ -155,13 +156,10 @@ async function generateForTopics(req, res, next) {
 	if (meta.config['feeds:disableRSS']) {
 		return next();
 	}
-	let token = null;
-	if (req.query.token && req.query.uid) {
-		token = await db.getObjectField(`user:${req.query.uid}`, 'rss_token');
-	}
+	const uid = await getUidFromToken(req);
 
 	await sendTopicsFeed({
-		uid: token && token === req.query.token ? req.query.uid : req.uid,
+		uid: uid,
 		title: 'Most recently created topics',
 		description: 'A list of topics that have been created recently',
 		feed_url: '/topics.rss',
@@ -211,13 +209,7 @@ async function generateSorted(options, req, res, next) {
 	}
 
 	const term = terms[req.params.term] || options.term;
-
-	let token = null;
-	if (req.query.token && req.query.uid) {
-		token = await db.getObjectField(`user:${req.query.uid}`, 'rss_token');
-	}
-
-	const uid = token && token === req.query.token ? req.query.uid : req.uid;
+	const uid = await getUidFromToken(req);
 
 	const params = {
 		uid: uid,
@@ -230,7 +222,7 @@ async function generateSorted(options, req, res, next) {
 	const { cid } = req.query;
 	if (cid) {
 		if (!await privileges.categories.can('topics:read', cid, uid)) {
-			return helpers.notAllowed(req, res);
+			return controllerHelpers.notAllowed(req, res);
 		}
 		params.cids = [cid];
 	}
@@ -401,13 +393,14 @@ async function generateForTag(req, res) {
 	if (meta.config['feeds:disableRSS']) {
 		return controllers404.handle404(req, res);
 	}
+	const uid = await getUidFromToken(req);
 	const tag = validator.escape(String(req.params.tag));
 	const page = parseInt(req.query.page, 10) || 1;
 	const topicsPerPage = meta.config.topicsPerPage || 20;
 	const start = Math.max(0, (page - 1) * topicsPerPage);
 	const stop = start + topicsPerPage - 1;
 	await sendTopicsFeed({
-		uid: req.uid,
+		uid: uid,
 		title: `Topics tagged with ${tag}`,
 		description: `A list of topics that have been tagged with ${tag}`,
 		feed_url: `/tags/${tag}.rss`,
@@ -415,6 +408,15 @@ async function generateForTag(req, res) {
 		start: start,
 		stop: stop,
 	}, `tag:${tag}:topics`, res);
+}
+
+async function getUidFromToken(req) {
+	let token = null;
+	if (req.query.token && req.query.uid) {
+		token = await db.getObjectField(`user:${req.query.uid}`, 'rss_token');
+	}
+
+	return token && token === req.query.token ? req.query.uid : req.uid;
 }
 
 function sendFeed(feed, res) {

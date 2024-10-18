@@ -1,9 +1,11 @@
 'use strict';
 
 
-define('admin/extend/rewards', ['alerts'], function (alerts) {
+define('admin/extend/rewards', [
+	'alerts',
+	'jquery-ui/widgets/sortable',
+], function (alerts) {
 	const rewards = {};
-
 
 	let available;
 	let active;
@@ -41,10 +43,15 @@ define('admin/extend/rewards', ['alerts'], function (alerts) {
 			})
 			.on('click', '.toggle', function () {
 				const btn = $(this);
-				const disabled = btn.hasClass('btn-success');
-				btn.toggleClass('btn-warning').toggleClass('btn-success').translateHtml('[[admin/extend/rewards:' + (disabled ? 'disable' : 'enable') + ']]');
+				btn.parent().find('.toggle').removeClass('hidden');
+				btn.addClass('hidden');
 				// send disable api call
 				return false;
+			})
+			.sortable({
+				handle: '[component="sort/handle"]',
+				axis: 'y',
+				zIndex: 9999,
 			});
 
 		$('#new').on('click', newReward);
@@ -92,19 +99,19 @@ define('admin/extend/rewards', ['alerts'], function (alerts) {
 		}
 
 		inputs.forEach(function (input) {
-			html += '<label for="' + input.name + '">' + input.label + '<br />';
+			html += `<label class="form-label text-nowrap" for="${input.name}">${input.label}<br />`;
 			switch (input.type) {
 				case 'select':
-					html += '<select class="form-control" name="' + input.name + '">';
+					html += `<select class="form-select form-select-sm" name="${input.name}" >`;
 					input.values.forEach(function (value) {
-						html += '<option value="' + value.value + '">' + value.name + '</option>';
+						html += `<option value="${value.value}">${value.name}</option>`;
 					});
 					break;
 				case 'text':
-					html += '<input type="text" class="form-control" name="' + input.name + '" />';
+					html += `<input type="text" class="form-control form-control-sm" name="${input.name}"  />`;
 					break;
 			}
-			html += '</label><br />';
+			html += '</label>';
 		});
 
 		div.html(html);
@@ -162,23 +169,28 @@ define('admin/extend/rewards', ['alerts'], function (alerts) {
 			});
 
 			data.id = $(this).attr('data-id');
-			data.disabled = $(this).find('.toggle').hasClass('btn-success');
+			data.disabled = $(this).find('.toggle.disable').hasClass('hidden');
 
 			activeRewards.push(data);
 		});
 
 		socket.emit('admin.rewards.save', activeRewards, function (err, result) {
 			if (err) {
-				alerts.error(err);
-			} else {
-				alerts.success('[[admin/extend/rewards:alert.save-success]]');
-				// newly added rewards are missing data-id, update to prevent rewards getting duplicated
-				$('#active li').each(function (index) {
-					if (!$(this).attr('data-id')) {
-						$(this).attr('data-id', result[index].id);
-					}
-				});
+				return alerts.error(err);
 			}
+
+			const saveBtn = document.getElementById('save');
+			saveBtn.classList.toggle('saved', true);
+			setTimeout(() => {
+				saveBtn.classList.toggle('saved', false);
+			}, 5000);
+
+			// newly added rewards are missing data-id, update to prevent rewards getting duplicated
+			$('#active li').each(function (index) {
+				if (!$(this).attr('data-id')) {
+					$(this).attr('data-id', result[index].id);
+				}
+			});
 		});
 	}
 

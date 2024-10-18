@@ -14,6 +14,8 @@ const translator = require('../../translator');
 const messaging = require('../../messaging');
 const categories = require('../../categories');
 
+const relative_path = nconf.get('relative_path');
+
 const helpers = module.exports;
 
 helpers.getUserDataByUserSlug = async function (userslug, callerUID, query = {}) {
@@ -26,15 +28,16 @@ helpers.getUserDataByUserSlug = async function (userslug, callerUID, query = {})
 	if (!results.userData) {
 		throw new Error('[[error:invalid-uid]]');
 	}
+
 	await parseAboutMe(results.userData);
 
 	let { userData } = results;
-	const { userSettings } = results;
-	const { isAdmin } = results;
-	const { isGlobalModerator } = results;
-	const { isModerator } = results;
-	const { canViewInfo } = results;
+	const { userSettings, isAdmin, isGlobalModerator, isModerator, canViewInfo } = results;
 	const isSelf = parseInt(callerUID, 10) === parseInt(userData.uid, 10);
+
+	if (meta.config['reputation:disabled']) {
+		delete userData.reputation;
+	}
 
 	userData.age = Math.max(
 		0,
@@ -42,6 +45,7 @@ helpers.getUserDataByUserSlug = async function (userslug, callerUID, query = {})
 	);
 
 	userData = await user.hidePrivateData(userData, callerUID);
+	userData.emailHidden = !userSettings.showemail;
 	userData.emailClass = userSettings.showemail ? 'hide' : '';
 
 	// If email unconfirmed, hide from result set
@@ -74,9 +78,17 @@ helpers.getUserDataByUserSlug = async function (userslug, callerUID, query = {})
 	userData.canChangePassword = isAdmin || (isSelf && !meta.config['password:disableEdit']);
 	userData.isSelf = isSelf;
 	userData.isFollowing = results.isFollowing;
+	userData.canChat = results.canChat;
 	userData.hasPrivateChat = results.hasPrivateChat;
+	userData.iconBackgrounds = results.iconBackgrounds;
 	userData.showHidden = results.canEdit; // remove in v1.19.0
+	userData.allowProfilePicture = !userData.isSelf || !!meta.config['reputation:disabled'] || userData.reputation >= meta.config['min:rep:profile-picture'];
+	userData.allowCoverPicture = !userData.isSelf || !!meta.config['reputation:disabled'] || userData.reputation >= meta.config['min:rep:cover-picture'];
+	userData.allowProfileImageUploads = meta.config.allowProfileImageUploads;
+	userData.allowedProfileImageExtensions = user.getAllowedProfileImageExtensions().map(ext => `.${ext}`).join(', ');
 	userData.groups = Array.isArray(results.groups) && results.groups.length ? results.groups[0] : [];
+	userData.selectedGroup = userData.groups.filter(group => group && userData.groupTitleArray.includes(group.name))
+		.sort((a, b) => userData.groupTitleArray.indexOf(a.name) - userData.groupTitleArray.indexOf(b.name));
 	userData.disableSignatures = meta.config.disableSignatures === 1;
 	userData['reputation:disabled'] = meta.config['reputation:disabled'] === 1;
 	userData['downvote:disabled'] = meta.config['downvote:disabled'] === 1;
@@ -90,7 +102,6 @@ helpers.getUserDataByUserSlug = async function (userslug, callerUID, query = {})
 		canViewInfo: canViewInfo,
 	});
 
-	userData.sso = results.sso.associations;
 	userData.banned = Boolean(userData.banned);
 	userData.muted = parseInt(userData.mutedUntil, 10) > Date.now();
 	userData.website = escape(userData.website);
@@ -128,25 +139,44 @@ function escape(value) {
 }
 
 async function getAllData(uid, callerUID) {
+	// loading these before caches them, so the big promiseParallel doesn't make extra db calls
+	const [[isTargetAdmin, isCallerAdmin], isGlobalModerator] = await Promise.all([
+		user.isAdministrator([uid, callerUID]),
+		user.isGlobalModerator(callerUID),
+	]);
+
 	return await utils.promiseParallel({
 		userData: user.getUserData(uid),
-		isTargetAdmin: user.isAdministrator(uid),
+		isTargetAdmin: isTargetAdmin,
 		userSettings: user.getSettings(uid),
-		isAdmin: user.isAdministrator(callerUID),
-		isGlobalModerator: user.isGlobalModerator(callerUID),
+		isAdmin: isCallerAdmin,
+		isGlobalModerator: isGlobalModerator,
 		isModerator: user.isModeratorOfAnyCategory(callerUID),
 		isFollowing: user.isFollowing(callerUID, uid),
 		ips: user.getIPs(uid, 4),
 		profile_menu: getProfileMenu(uid, callerUID),
 		groups: groups.getUserGroups([uid]),
-		sso: plugins.hooks.fire('filter:auth.list', { uid: uid, associations: [] }),
 		canEdit: privileges.users.canEdit(callerUID, uid),
 		canBanUser: privileges.users.canBanUser(callerUID, uid),
 		canMuteUser: privileges.users.canMuteUser(callerUID, uid),
 		isBlocked: user.blocks.is(uid, callerUID),
 		canViewInfo: privileges.global.can('view:users:info', callerUID),
+		canChat: canChat(callerUID, uid),
 		hasPrivateChat: messaging.hasPrivateChat(callerUID, uid),
+		iconBackgrounds: user.getIconBackgrounds(),
 	});
+}
+
+async function canChat(callerUID, uid) {
+	try {
+		await messaging.canMessageUser(callerUID, uid);
+	} catch (err) {
+		if (err.message.startsWith('[[error:')) {
+			return false;
+		}
+		throw err;
+	}
+	return true;
 }
 
 async function getCounts(userData, callerUID) {
@@ -154,8 +184,8 @@ async function getCounts(userData, callerUID) {
 	const cids = await categories.getCidsByPrivilege('categories:cid', callerUID, 'topics:read');
 	const promises = {
 		posts: db.sortedSetsCardSum(cids.map(c => `cid:${c}:uid:${uid}:pids`)),
-		best: Promise.all(cids.map(async c => db.sortedSetCount(`cid:${c}:uid:${uid}:pids:votes`, 1, '+inf'))),
-		controversial: Promise.all(cids.map(async c => db.sortedSetCount(`cid:${c}:uid:${uid}:pids:votes`, '-inf', -1))),
+		best: db.sortedSetsCardSum(cids.map(c => `cid:${c}:uid:${uid}:pids:votes`), 1, '+inf'),
+		controversial: db.sortedSetsCardSum(cids.map(c => `cid:${c}:uid:${uid}:pids:votes`), '-inf', -1),
 		topics: db.sortedSetsCardSum(cids.map(c => `cid:${c}:uid:${uid}:tids`)),
 	};
 	if (userData.isAdmin || userData.isSelf) {
@@ -166,11 +196,10 @@ async function getCounts(userData, callerUID) {
 		promises.bookmarks = db.sortedSetCard(`uid:${uid}:bookmarks`);
 		promises.uploaded = db.sortedSetCard(`uid:${uid}:uploads`);
 		promises.categoriesWatched = user.getWatchedCategories(uid);
+		promises.tagsWatched = db.sortedSetCard(`uid:${uid}:followed_tags`);
 		promises.blocks = user.getUserField(userData.uid, 'blocksCount');
 	}
 	const counts = await utils.promiseParallel(promises);
-	counts.best = counts.best.reduce((sum, count) => sum + count, 0);
-	counts.controversial = counts.controversial.reduce((sum, count) => sum + count, 0);
 	counts.categoriesWatched = counts.categoriesWatched && counts.categoriesWatched.length;
 	counts.groups = userData.groups.length;
 	counts.following = userData.followingCount;
@@ -183,7 +212,7 @@ async function getProfileMenu(uid, callerUID) {
 	const links = [{
 		id: 'info',
 		route: 'info',
-		name: '[[user:account_info]]',
+		name: '[[user:account-info]]',
 		icon: 'fa-info',
 		visibility: {
 			self: false,
@@ -225,11 +254,18 @@ async function getProfileMenu(uid, callerUID) {
 		});
 	}
 
-	return await plugins.hooks.fire('filter:user.profileMenu', {
+	const data = await plugins.hooks.fire('filter:user.profileMenu', {
 		uid: uid,
 		callerUID: callerUID,
 		links: links,
 	});
+	const userslug = await user.getUserField(uid, 'userslug');
+	data.links.forEach((link) => {
+		if (!link.hasOwnProperty('url')) {
+			link.url = `${relative_path}/user/${userslug}/${link.route}`;
+		}
+	});
+	return data;
 }
 
 async function parseAboutMe(userData) {

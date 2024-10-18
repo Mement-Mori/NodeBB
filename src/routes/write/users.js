@@ -26,6 +26,11 @@ function authenticatedRoutes() {
 	setupApiRoute(router, 'delete', '/:uid/content', [...middlewares, middleware.assert.user], controllers.write.users.deleteContent);
 	setupApiRoute(router, 'delete', '/:uid/account', [...middlewares, middleware.assert.user], controllers.write.users.deleteAccount);
 
+	setupApiRoute(router, 'get', '/:uid/status', [], controllers.write.users.getStatus);
+	setupApiRoute(router, 'head', '/:uid/status/:status', [], controllers.write.users.checkStatus);
+
+	setupApiRoute(router, 'get', '/:uid/chat', [...middlewares], controllers.write.users.getPrivateRoomId);
+
 	setupApiRoute(router, 'put', '/:uid/settings', [...middlewares, middleware.checkRequired.bind(null, ['settings'])], controllers.write.users.updateSettings);
 
 	setupApiRoute(router, 'put', '/:uid/password', [...middlewares, middleware.checkRequired.bind(null, ['newPassword']), middleware.assert.user], controllers.write.users.changePassword);
@@ -48,6 +53,7 @@ function authenticatedRoutes() {
 	setupApiRoute(router, 'get', '/:uid/invites/groups', [...middlewares, middleware.assert.user], controllers.write.users.getInviteGroups);
 
 	setupApiRoute(router, 'get', '/:uid/emails', [...middlewares, middleware.assert.user], controllers.write.users.listEmails);
+	setupApiRoute(router, 'post', '/:uid/emails', [...middlewares, middleware.assert.user], controllers.write.users.addEmail);
 	setupApiRoute(router, 'get', '/:uid/emails/:email', [...middlewares, middleware.assert.user], controllers.write.users.getEmail);
 	setupApiRoute(router, 'post', '/:uid/emails/:email/confirm', [...middlewares, middleware.assert.user], controllers.write.users.confirmEmail);
 

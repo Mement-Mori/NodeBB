@@ -15,14 +15,14 @@ define('forum/topic/change-owner', [
 		if (modal) {
 			return;
 		}
-		app.parseAndTranslate('partials/change_owner_modal', {}, function (html) {
+		app.parseAndTranslate('modals/change-owner', {}, function (html) {
 			modal = html;
 
 			commit = modal.find('#change_owner_commit');
 
 			$('body').append(modal);
 
-			modal.find('.close,#change_owner_cancel').on('click', closeModal);
+			modal.find('#change_owner_cancel').on('click', closeModal);
 			modal.find('#username').on('keyup', checkButtonEnable);
 			postSelect.init(onPostToggled, {
 				allowMainPostSelect: true,
@@ -46,9 +46,9 @@ define('forum/topic/change-owner', [
 
 	function showPostsSelected() {
 		if (postSelect.pids.length) {
-			modal.find('#pids').translateHtml('[[topic:fork_pid_count, ' + postSelect.pids.length + ']]');
+			modal.find('#pids').translateHtml('[[topic:fork-pid-count, ' + postSelect.pids.length + ']]');
 		} else {
-			modal.find('#pids').translateHtml('[[topic:fork_no_pids]]');
+			modal.find('#pids').translateHtml('[[topic:fork-no-pids]]');
 		}
 	}
 
@@ -73,7 +73,7 @@ define('forum/topic/change-owner', [
 			if (err) {
 				return alerts.error(err);
 			}
-			ajaxify.refresh();
+			ajaxify.go(`/post/${postSelect.pids[0]}`);
 
 			closeModal();
 		});

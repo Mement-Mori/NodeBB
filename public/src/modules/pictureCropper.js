@@ -5,10 +5,10 @@ define('pictureCropper', ['alerts'], function (alerts) {
 
 	module.show = function (data, callback) {
 		const fileSize = data.hasOwnProperty('fileSize') && data.fileSize !== undefined ? parseInt(data.fileSize, 10) : false;
-		app.parseAndTranslate('partials/modals/upload_file_modal', {
+		app.parseAndTranslate('modals/upload-file', {
 			showHelp: data.hasOwnProperty('showHelp') && data.showHelp !== undefined ? data.showHelp : true,
 			fileSize: fileSize,
-			title: data.title || '[[global:upload_file]]',
+			title: data.title || '[[global:upload-file]]',
 			description: data.description || '',
 			button: data.button || '[[global:upload]]',
 			accept: data.accept ? data.accept.replace(/,/g, '&#44; ') : '',

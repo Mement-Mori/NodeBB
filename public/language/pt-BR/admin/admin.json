@@ -7,5 +7,12 @@
 	"changes-saved": "Alterações Salvas",
 	"changes-saved-message": "Suas alterações na configuração do NodeBB foram salvas.",
 	"changes-not-saved": "Alterações não foram Salvas",
-	"changes-not-saved-message": "O NodeBB encontrou um problema ao salvar suas alterações. (%1)"
+	"changes-not-saved-message": "O NodeBB encontrou um problema ao salvar suas alterações. (%1)",
+	"save-changes": "Salvar Alterações",
+	"min": "Min:",
+	"max": "Max:",
+	"view": "Visualizar",
+	"edit": "Editar",
+	"add": "Adicionar",
+	"select-icon": "Selecionar Ícone"
 }

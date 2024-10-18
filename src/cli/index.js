@@ -32,12 +32,6 @@ try {
 		if (!semver.satisfies(version, defaultPackage.dependencies[packageName])) {
 			const e = new TypeError(`Incorrect dependency version: ${packageName}`);
 			e.code = 'DEP_WRONG_VERSION';
-			// delete the module from require cache so it doesn't break rest of the upgrade
-			// https://github.com/NodeBB/NodeBB/issues/11173
-			const resolvedModule = require.resolve(packageName);
-			if (require.cache[resolvedModule]) {
-				delete require.cache[resolvedModule];
-			}
 			throw e;
 		}
 	};
@@ -56,6 +50,16 @@ try {
 		packageInstall.updatePackageFile();
 		packageInstall.preserveExtraneousPlugins();
 		packageInstall.installAll();
+
+		// delete the module from require cache so it doesn't break rest of the upgrade
+		// https://github.com/NodeBB/NodeBB/issues/11173
+		const packages = ['nconf', 'async', 'commander', 'chalk', 'lodash', 'lru-cache'];
+		packages.forEach((packageName) => {
+			const resolvedModule = require.resolve(packageName);
+			if (require.cache[resolvedModule]) {
+				delete require.cache[resolvedModule];
+			}
+		});
 
 		const chalk = require('chalk');
 		console.log(`${chalk.green('OK')}\n`);
@@ -93,6 +97,9 @@ nconf.argv(opts).env({
 	separator: '__',
 });
 
+process.env.NODE_ENV = process.env.NODE_ENV || 'production';
+global.env = process.env.NODE_ENV || 'production';
+
 prestart.setupWinston();
 
 // Alternate configuration file support
@@ -107,7 +114,9 @@ if (!configExists && process.argv[2] !== 'setup') {
 	return;
 }
 
-process.env.CONFIG = configFile;
+if (configExists) {
+	process.env.CONFIG = configFile;
+}
 
 // running commands
 program
@@ -228,6 +237,12 @@ program
 	.description('Outputs various system info')
 	.action(() => {
 		require('./manage').info();
+	});
+program
+	.command('maintenance <toggle>')
+	.description('Toggle maintenance mode true/false')
+	.action((toggle) => {
+		require('./manage').maintenance(toggle);
 	});
 
 // reset

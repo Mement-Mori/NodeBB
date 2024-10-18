@@ -10,11 +10,20 @@ define('forum/topic/threadTools', [
 	'hooks',
 	'bootbox',
 	'alerts',
-], function (components, translator, handleBack, posts, api, hooks, bootbox, alerts) {
+	'bootstrap',
+	'helpers',
+], function (components, translator, handleBack, posts, api, hooks, bootbox, alerts, bootstrap, helpers) {
 	const ThreadTools = {};
 
 	ThreadTools.init = function (tid, topicContainer) {
 		renderMenu(topicContainer);
+
+		$('.topic-main-buttons [title]').tooltip({
+			container: '#content',
+			animation: false,
+		});
+
+		ThreadTools.observeTopicLabels($('[component="topic/labels"]'));
 
 		// function topicCommand(method, path, command, onComplete) {
 		topicContainer.on('click', '[component="topic/delete"]', function () {
@@ -52,6 +61,28 @@ define('forum/topic/threadTools', [
 			return false;
 		});
 
+		topicContainer.on('click', '[component="topic/mark-unread"]', function () {
+			topicCommand('del', '/read', undefined, () => {
+				if (app.previousUrl && !app.previousUrl.match('^/topic')) {
+					ajaxify.go(app.previousUrl, function () {
+						handleBack.onBackClicked(true);
+					});
+				} else if (ajaxify.data.category) {
+					ajaxify.go('category/' + ajaxify.data.category.slug, handleBack.onBackClicked);
+				}
+
+				alerts.success('[[topic:mark-unread.success]]');
+			});
+		});
+
+		topicContainer.on('click', '[component="topic/mark-unread-for-all"]', function () {
+			const btn = $(this);
+			topicCommand('put', '/bump', undefined, () => {
+				alerts.success('[[topic:markAsUnreadForAll.success]]');
+				btn.parents('.thread-tools.open').find('.dropdown-toggle').trigger('click');
+			});
+		});
+
 		topicContainer.on('click', '[component="topic/event/delete"]', function () {
 			const eventId = $(this).attr('data-topic-event-id');
 			const eventEl = $(this).parents('[component="topic/event"]');
@@ -64,38 +95,6 @@ define('forum/topic/threadTools', [
 						.catch(alerts.error);
 				}
 			});
-		});
-
-		// todo: should also use topicCommand, but no write api call exists for this yet
-		topicContainer.on('click', '[component="topic/mark-unread"]', function () {
-			socket.emit('topics.markUnread', tid, function (err) {
-				if (err) {
-					return alerts.error(err);
-				}
-
-				if (app.previousUrl && !app.previousUrl.match('^/topic')) {
-					ajaxify.go(app.previousUrl, function () {
-						handleBack.onBackClicked(true);
-					});
-				} else if (ajaxify.data.category) {
-					ajaxify.go('category/' + ajaxify.data.category.slug, handleBack.onBackClicked);
-				}
-
-				alerts.success('[[topic:mark_unread.success]]');
-			});
-			return false;
-		});
-
-		topicContainer.on('click', '[component="topic/mark-unread-for-all"]', function () {
-			const btn = $(this);
-			socket.emit('topics.markAsUnreadForAll', [tid], function (err) {
-				if (err) {
-					return alerts.error(err);
-				}
-				alerts.success('[[topic:markAsUnreadForAll.success]]');
-				btn.parents('.thread-tools.open').find('.dropdown-toggle').trigger('click');
-			});
-			return false;
 		});
 
 		topicContainer.on('click', '[component="topic/move"]', function () {
@@ -114,6 +113,20 @@ define('forum/topic/threadTools', [
 		topicContainer.on('click', '[component="topic/fork"]', function () {
 			require(['forum/topic/fork'], function (fork) {
 				fork.init();
+			});
+		});
+
+		topicContainer.on('click', '[component="topic/merge"]', function () {
+			require(['forum/topic/merge'], function (merge) {
+				merge.init(function () {
+					merge.addTopic(ajaxify.data.tid);
+				});
+			});
+		});
+
+		topicContainer.on('click', '[component="topic/tag"]', function () {
+			require(['forum/topic/tag'], function (tag) {
+				tag.init([ajaxify.data], ajaxify.data.tagWhitelist);
 			});
 		});
 
@@ -138,9 +151,9 @@ define('forum/topic/threadTools', [
 			api[method](`/topics/${tid}/${type}`, {}, () => {
 				let message = '';
 				if (type === 'follow') {
-					message = state ? '[[topic:following_topic.message]]' : '[[topic:not_following_topic.message]]';
+					message = state ? '[[topic:following-topic.message]]' : '[[topic:not-following-topic.message]]';
 				} else if (type === 'ignore') {
-					message = state ? '[[topic:ignoring_topic.message]]' : '[[topic:not_following_topic.message]]';
+					message = state ? '[[topic:ignoring-topic.message]]' : '[[topic:not-following-topic.message]]';
 				}
 
 				// From here on out, type changes to 'unfollow' if state is falsy
@@ -162,8 +175,8 @@ define('forum/topic/threadTools', [
 				alerts.alert({
 					type: 'danger',
 					alert_id: 'topic_follow',
-					title: '[[global:please_log_in]]',
-					message: '[[topic:login_to_subscribe]]',
+					title: '[[global:please-log-in]]',
+					message: '[[topic:login-to-subscribe]]',
 					timeout: 5000,
 				});
 			});
@@ -172,27 +185,39 @@ define('forum/topic/threadTools', [
 		}
 	};
 
+	ThreadTools.observeTopicLabels = function (labels) {
+		// show or hide topic/labels container depending on children visibility
+		const mut = new MutationObserver(function (mutations) {
+			const first = mutations[0];
+			if (first && first.attributeName === 'class') {
+				const visibleChildren = labels.children().filter((index, el) => !$(el).hasClass('hidden'));
+				labels.toggleClass('hidden', !visibleChildren.length);
+			}
+		});
+
+		labels.children().each((index, el) => {
+			mut.observe(el, { attributes: true });
+		});
+	};
+
 	function renderMenu(container) {
-		container.on('show.bs.dropdown', '.thread-tools', function () {
+		if (!container) {
+			return;
+		}
+		container.on('show.bs.dropdown', '.thread-tools', async function () {
 			const $this = $(this);
 			const dropdownMenu = $this.find('.dropdown-menu');
-			if (dropdownMenu.html()) {
+			const { top } = this.getBoundingClientRect();
+			$this.toggleClass('dropup', top > window.innerHeight / 2);
+			if (dropdownMenu.attr('data-loaded')) {
 				return;
 			}
-
-			dropdownMenu.toggleClass('hidden', true);
-			socket.emit('topics.loadTopicTools', { tid: ajaxify.data.tid, cid: ajaxify.data.cid }, function (err, data) {
-				if (err) {
-					return alerts.error(err);
-				}
-				app.parseAndTranslate('partials/topic/topic-menu-list', data, function (html) {
-					dropdownMenu.html(html);
-					dropdownMenu.toggleClass('hidden', false);
-
-					hooks.fire('action:topic.tools.load', {
-						element: dropdownMenu,
-					});
-				});
+			dropdownMenu.html(helpers.generatePlaceholderWave([8, 8, 8]));
+			const data = await socket.emit('topics.loadTopicTools', { tid: ajaxify.data.tid, cid: ajaxify.data.cid });
+			const html = await app.parseAndTranslate('partials/topic/topic-menu-list', data);
+			$(dropdownMenu).attr('data-loaded', 'true').html(html);
+			hooks.fire('action:topic.tools.load', {
+				element: $(dropdownMenu),
 			});
 		});
 	}
@@ -215,7 +240,7 @@ define('forum/topic/threadTools', [
 			case 'delete':
 			case 'restore':
 			case 'purge':
-				bootbox.confirm(`[[topic:thread_tools.${command}_confirm]]`, execute);
+				bootbox.confirm(`[[topic:thread-tools.${command}-confirm]]`, execute);
 				break;
 
 			case 'pin':
@@ -231,10 +256,9 @@ define('forum/topic/threadTools', [
 	ThreadTools.requestPinExpiry = function (body, onSuccess) {
 		app.parseAndTranslate('modals/set-pin-expiry', {}, function (html) {
 			const modal = bootbox.dialog({
-				title: '[[topic:thread_tools.pin]]',
+				title: '[[topic:thread-tools.pin]]',
 				message: html,
 				onEscape: true,
-				size: 'small',
 				buttons: {
 					cancel: {
 						label: '[[modules:bootbox.cancel]]',
@@ -244,19 +268,19 @@ define('forum/topic/threadTools', [
 						label: '[[global:save]]',
 						className: 'btn-primary',
 						callback: function () {
-							const expiryEl = modal.get(0).querySelector('#expiry');
-							let expiry = expiryEl.value;
-
+							const expiryDateEl = modal.get(0).querySelector('#expiry-date');
+							const expiryTimeEl = modal.get(0).querySelector('#expiry-time');
+							let expiryDate = expiryDateEl.value;
+							let expiryTime = expiryTimeEl.value;
 							// No expiry set
-							if (expiry === '') {
+							if (expiryDate === '' && expiryTime === '') {
 								return onSuccess();
 							}
-
-							// Expiration date set
-							expiry = new Date(expiry);
-
-							if (expiry && expiry.getTime() > Date.now()) {
-								body.expiry = expiry.getTime();
+							expiryDate = expiryDate || new Date().toDateString();
+							expiryTime = expiryTime || new Date().toTimeString();
+							const date = new Date(`${expiryDate} ${expiryTime}`);
+							if (date.getTime() > Date.now()) {
+								body.expiry = date.getTime();
 								onSuccess();
 							} else {
 								alerts.error('[[error:invalid-date]]');
@@ -358,10 +382,12 @@ define('forum/topic/threadTools', [
 			unfollow: '[[topic:not-watching]]',
 			ignore: '[[topic:ignoring]]',
 		};
+
 		translator.translate(titles[state], function (translatedTitle) {
-			$('[component="topic/watch"] button')
-				.attr('title', translatedTitle)
-				.tooltip('fixTitle');
+			const tooltip = bootstrap.Tooltip.getInstance('[component="topic/watch"]');
+			if (tooltip) {
+				tooltip.setContent({ '.tooltip-inner': translatedTitle });
+			}
 		});
 
 		let menu = components.get('topic/following/menu');
